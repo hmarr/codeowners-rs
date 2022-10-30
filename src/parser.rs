@@ -1,0 +1,32 @@
+use std::io::{BufRead, BufReader, Read};
+
+#[derive(Debug)]
+
+pub struct Rule {
+    pub pattern: String,
+    pub owners: Vec<String>,
+}
+
+// TODO: Replace with a more rubost parser. Currently this parser accepts various
+// invalid inputs and ignores any errors.
+pub fn parse_rules(reader: impl Read) -> Vec<Rule> {
+    BufReader::new(reader)
+        .lines()
+        .map(|line| line.unwrap())
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+
+            let mut pattern = parts.next()?.to_owned();
+            if pattern.starts_with('/') {
+                pattern = pattern[1..].to_owned();
+            }
+            if pattern.ends_with('/') {
+                pattern.push_str("**/*");
+            }
+
+            let owners = parts.map(|s| s.to_owned()).collect();
+
+            Some(Rule { pattern, owners })
+        })
+        .collect()
+}
