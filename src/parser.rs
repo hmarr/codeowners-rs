@@ -15,15 +15,7 @@ pub fn parse_rules(reader: impl Read) -> Vec<Rule> {
         .map(|line| line.unwrap())
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
-
-            let mut pattern = parts.next()?.to_owned();
-            if pattern.starts_with('/') {
-                pattern = pattern[1..].to_owned();
-            }
-            if pattern.ends_with('/') {
-                pattern.push_str("**/*");
-            }
-
+            let pattern = parts.next()?.to_owned();
             let owners = parts.map(|s| s.to_owned()).collect();
 
             Some(Rule { pattern, owners })

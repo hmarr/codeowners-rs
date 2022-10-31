@@ -37,6 +37,10 @@ pub struct PatternNFA {
     // to a regex that matches the segment and the next state
     complex_edges: Vec<BTreeMap<String, (regex::Regex, usize)>>,
 
+    // For each state, there is optionally an epsilon edge – that is, an edge that we
+    // automatically traverse without consuming any input
+    double_star_edges: Vec<Option<usize>>,
+
     // For each state, there is boolean indicating whether there's a self-loop
     self_loop_edges: Vec<bool>,
 
@@ -52,6 +56,7 @@ impl PatternNFA {
             literal_edges: vec![BTreeMap::new()],
             wildcard_edges: vec![None],
             complex_edges: vec![BTreeMap::new()],
+            double_star_edges: vec![None],
             self_loop_edges: vec![false],
             next_pattern_id: 0,
         }
@@ -61,32 +66,49 @@ impl PatternNFA {
         let pattern_id = self.next_pattern_id;
         self.next_pattern_id += 1;
 
-        let pattern = if pattern.starts_with('/') {
-            &pattern[1..]
-        } else {
-            self.add_self_loop(Self::START_STATE);
-            pattern
+        let mut start_state_id = Self::START_STATE;
+
+        let pattern = match pattern.strip_prefix('/') {
+            Some(pattern) => pattern,
+            None => {
+                start_state_id = self.add_double_star_segment(Self::START_STATE);
+                pattern
+            }
         };
 
-        let pattern = if pattern.ends_with('/') {
-            &pattern[..pattern.len() - 1]
-        } else {
-            pattern
+        // We (currently) only match files (as opposed to directories), so the trailing slash
+        // has no effect except adding an extra empty path component at the end
+        let (pattern, trailing_slash) = match pattern.strip_suffix('/') {
+            Some(pattern) => (pattern, true),
+            None => (pattern, false),
         };
 
-        let end_state_id = pattern
-            .split('/')
-            .fold(Self::START_STATE, |prev_state_id, segment| {
+        let segments = pattern.split('/').collect::<Vec<_>>();
+        let mut end_state_id = segments
+            .iter()
+            .fold(start_state_id, |prev_state_id, segment| {
                 self.add_pattern_segment(prev_state_id, segment)
             });
+
+        // If the pattern ends with a trailing slash, we match everything under the
+        // directory, but not the directory itself, so we need one more segment
+        if trailing_slash {
+            end_state_id = self.add_wildcard_segment(end_state_id);
+        }
+
+        // Patterns are all prefix-matched, which effectively means they all end in
+        // a /**, so we need to add a self loop to the final state
+        // TODO: only add this segment iff: (a) the pattern ends in a slash, or (b) the pattern
+        //       ends in a literal segment that doesn't contain a wildcard character
+        if let Some(&last_segment) = segments.last() {
+            if last_segment != "*" {
+                end_state_id = self.add_double_star_segment(end_state_id);
+            }
+        }
 
         // Mark the final state as the terminal state for this pattern
         self.state_mut(end_state_id)
             .set_terminal_for_pattern(pattern_id);
-
-        // Patterns are all prefix-matched, which effectively means they all end in
-        // a /**, so we need to add a self loop to the final state
-        self.add_self_loop(end_state_id);
 
         pattern_id
     }
@@ -94,7 +116,7 @@ impl PatternNFA {
     fn add_pattern_segment(&mut self, prev_state_id: usize, segment: &str) -> usize {
         match segment {
             "*" => self.add_wildcard_segment(prev_state_id),
-            "**" => self.add_self_loop(prev_state_id),
+            "**" => self.add_double_star_segment(prev_state_id),
             _ => {
                 if segment.chars().any(|c| c == '*' || c == '?') {
                     self.add_complex_segment(prev_state_id, segment)
@@ -150,9 +172,23 @@ impl PatternNFA {
         }
     }
 
-    fn add_self_loop(&mut self, state_id: usize) -> usize {
-        self.self_loop_edges[state_id] = true;
-        state_id
+    fn add_double_star_segment(&mut self, prev_state_id: usize) -> usize {
+        // Double star segments match zero or more of anything, so there's never a need to
+        // have multiple consecutive double star states. Multiple consecutive double star
+        // states mean we require multiple path segments, which violoates the gitignore spec
+        if self.self_loop_edges[prev_state_id] {
+            return prev_state_id;
+        }
+
+        match self.double_star_edges[prev_state_id] {
+            Some(next_state_id) => next_state_id,
+            None => {
+                let state_id = self.add_state();
+                self.self_loop_edges[state_id] = true;
+                self.double_star_edges[prev_state_id] = Some(state_id);
+                state_id
+            }
+        }
     }
 
     pub fn matches(&self, path: impl Into<PathBuf>) -> bool {
@@ -161,6 +197,10 @@ impl PatternNFA {
 
     pub fn matching_patterns(&self, path: impl Into<PathBuf>) -> HashSet<usize> {
         let mut states = vec![Self::START_STATE];
+        if let Some(epsilon_node_id) = self.double_star_edges[Self::START_STATE] {
+            states.push(epsilon_node_id);
+        }
+
         let mut matches = HashSet::<usize>::new();
         for segment in path.into().iter() {
             let segment = segment.to_str().unwrap();
@@ -183,6 +223,14 @@ impl PatternNFA {
                     next_states.push(state_id);
                 }
             }
+
+            // Automatically traverse epsilon edges
+            let epsilon_nodes = next_states
+                .iter()
+                .flat_map(|state_id| &self.double_star_edges[*state_id])
+                .collect::<Vec<_>>();
+            next_states.extend(epsilon_nodes);
+
             states = next_states;
         }
 
@@ -202,6 +250,7 @@ impl PatternNFA {
         self.literal_edges.push(BTreeMap::new());
         self.complex_edges.push(BTreeMap::new());
         self.wildcard_edges.push(None);
+        self.double_star_edges.push(None);
         self.self_loop_edges.push(false);
 
         id
@@ -236,6 +285,12 @@ impl PatternNFA {
             if let Some(next_state_id) = self.wildcard_edges[state_id] {
                 dot.push_str(&format!(
                     "  s{} -> s{} [label=\"*\"];\n",
+                    state_id, next_state_id
+                ));
+            }
+            if let Some(next_state_id) = self.double_star_edges[state_id] {
+                dot.push_str(&format!(
+                    "  s{} -> s{} [label=\"ε\"];\n",
                     state_id, next_state_id
                 ));
             }
@@ -318,12 +373,7 @@ mod tests {
             HashSet::from([patterns[0], patterns[1]])
         );
         assert_eq!(
-            nfa.matching_patterns("/script/foo"),
-            HashSet::from([patterns[0], patterns[1]])
-        );
-
-        assert_eq!(
-            nfa.matching_patterns("/bar/script/foo"),
+            nfa.matching_patterns("bar/script/foo"),
             HashSet::from([patterns[1]])
         );
     }
@@ -351,6 +401,7 @@ mod tests {
             nfa.add_pattern("src/*/mod.rs"),
             nfa.add_pattern("src/parser/*"),
             nfa.add_pattern("*/*/mod.rs"),
+            nfa.add_pattern("src/parser/*/"),
         ];
 
         println!("{}", nfa.generate_dot());
@@ -371,7 +422,27 @@ mod tests {
             nfa.matching_patterns("test/lexer/mod.rs"),
             HashSet::from([patterns[2]])
         );
-        assert_eq!(nfa.matching_patterns("parser/mod.rs"), HashSet::new())
+        assert_eq!(nfa.matching_patterns("parser/mod.rs"), HashSet::new());
+        assert_eq!(
+            nfa.matching_patterns("src/parser/subdir/thing.rs"),
+            HashSet::from([patterns[3]])
+        );
+    }
+
+    #[test]
+    fn test_trailing_wildcards() {
+        let mut nfa = PatternNFA::new();
+        let patterns = [nfa.add_pattern("/mammals/*"), nfa.add_pattern("/fish/*/")];
+
+        println!("{}", nfa.generate_dot());
+
+        assert!(!nfa.matches("mammals"));
+        assert!(nfa.matches("mammals/equus"));
+        assert!(!nfa.matches("mammals/equus/zebra"));
+
+        assert!(!nfa.matches("fish"));
+        assert!(!nfa.matches("fish/gaddus"));
+        assert!(nfa.matches("fish/gaddus/cod"));
     }
 
     #[test]
@@ -432,6 +503,8 @@ mod tests {
         let patterns = [nfa.add_pattern("foo/**"), nfa.add_pattern("**")];
 
         println!("{}", nfa.generate_dot());
+
+        assert_eq!(nfa.matching_patterns("bar"), HashSet::from([patterns[1]]));
 
         assert_eq!(
             nfa.matching_patterns("x/y/baz"),

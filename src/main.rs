@@ -1,12 +1,28 @@
-use std::{collections::HashMap, fs::File};
+use std::{
+    collections::HashMap,
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
+use clap::Parser;
 use nfa::PatternNFA;
 
 mod nfa;
 mod parser;
 
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    paths: Vec<PathBuf>,
+
+    #[arg(long)]
+    all_matching_rules: bool,
+}
+
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+
     let rules = parser::parse_rules(File::open("./CODEOWNERS")?);
 
     let mut nfa = PatternNFA::new();
@@ -16,30 +32,84 @@ fn main() -> Result<()> {
         .map(|(i, rule)| (nfa.add_pattern(&rule.pattern), i))
         .collect::<HashMap<_, _>>();
 
-    let root = ".";
-    for entry in walk_files(root) {
-        let path = entry
-            .path()
-            .strip_prefix(".") // TODO strip root?
-            .unwrap_or_else(|_| entry.path());
+    let root_paths = if cli.paths.is_empty() {
+        vec![PathBuf::from(".")]
+    } else {
+        cli.paths.clone()
+    };
 
-        match nfa.matching_patterns(path.to_str().unwrap()).iter().max() {
-            Some(id) => {
-                let rule = &rules[*rule_ids.get(id).unwrap()];
-                println!("{:<70}  {}", path.display(), rule.owners.join(" ")) // TODO join alloc?
+    for root_path in root_paths {
+        if !root_path.exists() {
+            eprintln!("error: path does not exist: {}", root_path.display());
+            continue;
+        }
+
+        if root_path.is_dir() {
+            for entry in walk_files(root_path) {
+                let path = entry
+                    .path()
+                    .strip_prefix(".")
+                    .unwrap_or_else(|_| entry.path());
+                print_owners(&cli, path, &nfa, &rule_ids, &rules);
             }
-            None => println!("{:<70}  (unowned)", path.display()),
+        } else {
+            print_owners(&cli, &root_path, &nfa, &rule_ids, &rules);
         }
     }
 
     Ok(())
 }
 
-fn walk_files(root: &str) -> impl Iterator<Item = walkdir::DirEntry> {
+fn print_owners(
+    cli: &Cli,
+    path: impl AsRef<Path>,
+    nfa: &PatternNFA,
+    rule_ids: &HashMap<usize, usize>,
+    rules: &[parser::Rule],
+) {
+    let path = path
+        .as_ref()
+        .strip_prefix(".")
+        .unwrap_or_else(|_| path.as_ref());
+    let matches = nfa.matching_patterns(path.to_str().unwrap());
+    if cli.all_matching_rules {
+        for match_id in &matches {
+            let rule_id = rule_ids[match_id];
+            let rule = &rules[rule_id];
+            eprintln!(
+                "{} matched rule #{}: {}  {}",
+                path.display(),
+                rule_id + 1,
+                rule.pattern,
+                rule.owners.join(" ")
+            );
+        }
+    }
+
+    let owners = match matches.iter().max() {
+        Some(id) => {
+            let owners = &rules[*rule_ids.get(id).unwrap()].owners;
+            if owners.is_empty() {
+                None
+            } else {
+                Some(owners)
+            }
+        }
+        None => None,
+    };
+    match owners {
+        Some(owners) => {
+            println!("{:<70}  {}", path.display(), owners.join(" "))
+        }
+        None => println!("{:<70}  (unowned)", path.display()),
+    }
+}
+
+fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = walkdir::DirEntry> {
     walkdir::WalkDir::new(root)
         .min_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| !entry.file_type().is_dir())
         .filter(|entry| !entry.path().starts_with("./.git"))
 }
