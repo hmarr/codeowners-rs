@@ -3,6 +3,8 @@ use std::{
     path::PathBuf,
 };
 
+use crate::wildcard;
+
 #[derive(Debug)]
 struct State {
     matching_patterns: Vec<usize>,
@@ -35,7 +37,7 @@ pub struct PatternNFA {
 
     // For each state, we map complex segments (those including wildcard characters)
     // to a regex that matches the segment and the next state
-    complex_edges: Vec<BTreeMap<String, (regex::Regex, usize)>>,
+    complex_edges: Vec<BTreeMap<String, usize>>,
 
     // For each state, there is optionally an epsilon edge – that is, an edge that we
     // automatically traverse without consuming any input
@@ -140,22 +142,10 @@ impl PatternNFA {
 
     fn add_complex_segment(&mut self, prev_state_id: usize, segment: &str) -> usize {
         match self.complex_edges[prev_state_id].get(segment) {
-            Some((_, next_state_id)) => *next_state_id,
+            Some(next_state_id) => *next_state_id,
             None => {
                 let state_id = self.add_state();
-                // TODO improve regex generation (escaping first, handling ? characters...)
-                let mut segment_pattern = r#"\A"#.to_owned();
-                for c in segment.chars() {
-                    match c {
-                        '*' => segment_pattern.push_str(r#"[^/]*"#),
-                        '?' => segment_pattern.push_str(r#"[^/]"#),
-                        _ => segment_pattern.push_str(&regex::escape(&c.to_string())), // TODO eugh!
-                    }
-                }
-                segment_pattern.push_str(r#"\z"#);
-                let segment_regex = regex::Regex::new(&segment_pattern).unwrap();
-                self.complex_edges[prev_state_id]
-                    .insert(segment.to_owned(), (segment_regex, state_id));
+                self.complex_edges[prev_state_id].insert(segment.to_owned(), state_id);
                 state_id
             }
         }
@@ -211,8 +201,8 @@ impl PatternNFA {
                 }
 
                 self.complex_edges[state_id]
-                    .values()
-                    .filter(|(pat, _)| pat.is_match(segment))
+                    .iter()
+                    .filter(|(pattern, _)| wildcard::matches(pattern, segment))
                     .for_each(|(_, next_id)| next_states.push(*next_id));
 
                 if let Some(next_id) = self.wildcard_edges[state_id] {
@@ -276,7 +266,7 @@ impl PatternNFA {
                     state_id, next_state_id, segment
                 ));
             }
-            for (segment, (_, next_state_id)) in self.complex_edges[state_id].iter() {
+            for (segment, next_state_id) in self.complex_edges[state_id].iter() {
                 dot.push_str(&format!(
                     "  s{} -> s{} [label=\"{}\"];\n",
                     state_id, next_state_id, segment

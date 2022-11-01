@@ -10,6 +10,7 @@ use nfa::PatternNFA;
 
 mod nfa;
 mod parser;
+mod wildcard;
 
 #[derive(Parser)]
 #[command(version)]
