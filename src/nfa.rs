@@ -96,10 +96,11 @@ impl PatternNFA {
             end_state_id = self.add_wildcard_segment(end_state_id);
         }
 
-        // Patterns are all prefix-matched, which effectively means they all end in
-        // a /**, so we need to add a self loop to the final state
-        // TODO: only add this segment iff: (a) the pattern ends in a slash, or (b) the pattern
-        //       ends in a literal segment that doesn't contain a wildcard character
+        // Most patterns are all prefix-matched, which effectively means they end in
+        // a /**, so we need to add a self loop to the final state. The exception is
+        // patterns that end with a single wildcard, which we handle separately, which
+        // don't match recursively. This appears to be a discrepancy between the
+        // CODEOWNERS globbing rules and the .gitignore rules.
         if let Some(&last_segment) = segments.last() {
             if last_segment != "*" {
                 end_state_id = self.add_double_star_segment(end_state_id);
@@ -143,13 +144,17 @@ impl PatternNFA {
             Some((_, next_state_id)) => *next_state_id,
             None => {
                 let state_id = self.add_state();
-                // TODO improve regex generation (escaping first, handling ? characters...)
                 let mut segment_pattern = r#"\A"#.to_owned();
                 for c in segment.chars() {
                     match c {
                         '*' => segment_pattern.push_str(r#"[^/]*"#),
                         '?' => segment_pattern.push_str(r#"[^/]"#),
-                        _ => segment_pattern.push_str(&regex::escape(&c.to_string())), // TODO eugh!
+                        _ => {
+                            if regex_syntax::is_meta_character(c) {
+                                segment_pattern.push('\\');
+                            }
+                            segment_pattern.push(c);
+                        }
                     }
                 }
                 segment_pattern.push_str(r#"\z"#);
@@ -212,7 +217,7 @@ impl PatternNFA {
 
                 self.complex_edges[state_id]
                     .values()
-                    .filter(|(pat, _)| pat.is_match(segment))
+                    .filter(|(pattern, _)| pattern.is_match(segment))
                     .for_each(|(_, next_id)| next_states.push(*next_id));
 
                 if let Some(next_id) = self.wildcard_edges[state_id] {
@@ -432,7 +437,8 @@ mod tests {
     #[test]
     fn test_trailing_wildcards() {
         let mut nfa = PatternNFA::new();
-        let patterns = [nfa.add_pattern("/mammals/*"), nfa.add_pattern("/fish/*/")];
+        nfa.add_pattern("/mammals/*");
+        nfa.add_pattern("/fish/*/");
 
         println!("{}", nfa.generate_dot());
 

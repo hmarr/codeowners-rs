@@ -78,6 +78,7 @@ dependencies = [
  "anyhow",
  "clap",
  "regex",
+ "regex-syntax",
  "walkdir",
 ]
 
