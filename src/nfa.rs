@@ -1,6 +1,7 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
+    sync::RwLock,
 };
 
 #[derive(Debug)]
@@ -44,6 +45,8 @@ pub struct PatternNFA {
     // For each state, there is boolean indicating whether there's a self-loop
     self_loop_edges: Vec<bool>,
 
+    transition_cache: RwLock<HashMap<String, Vec<usize>>>,
+
     next_pattern_id: usize,
 }
 
@@ -58,6 +61,7 @@ impl PatternNFA {
             complex_edges: vec![BTreeMap::new()],
             double_star_edges: vec![None],
             self_loop_edges: vec![false],
+            transition_cache: RwLock::new(HashMap::new()),
             next_pattern_id: 0,
         }
     }
@@ -206,45 +210,76 @@ impl PatternNFA {
             states.push(epsilon_node_id);
         }
 
-        let mut matches = HashSet::<usize>::new();
-        for segment in path.into().iter() {
-            let segment = segment.to_str().unwrap();
-            let mut next_states = Vec::new();
-            for state_id in states {
-                if let Some(next_id) = self.literal_edges[state_id].get(segment) {
-                    next_states.push(*next_id);
-                }
-
-                self.complex_edges[state_id]
-                    .values()
-                    .filter(|(pattern, _)| pattern.is_match(segment))
-                    .for_each(|(_, next_id)| next_states.push(*next_id));
-
-                if let Some(next_id) = self.wildcard_edges[state_id] {
-                    next_states.push(next_id);
-                }
-
-                if self.self_loop_edges[state_id] {
-                    next_states.push(state_id);
-                }
-            }
-
-            // Automatically traverse epsilon edges
-            let epsilon_nodes = next_states
+        states = self.step(
+            &path
+                .into()
                 .iter()
-                .flat_map(|state_id| &self.double_star_edges[*state_id])
-                .collect::<Vec<_>>();
-            next_states.extend(epsilon_nodes);
+                .map(|c| c.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            states,
+        );
 
-            states = next_states;
-        }
-
+        let mut matches = HashSet::new();
         for state_id in states {
             if self.state(state_id).terminal() {
                 matches.extend(self.state(state_id).matching_patterns.iter().copied());
             }
         }
         matches
+    }
+
+    pub fn step(&self, path_segments: &[&str], start_states: Vec<usize>) -> Vec<usize> {
+        let states = if !path_segments.is_empty() {
+            let subpath_segments = &path_segments[..path_segments.len() - 1];
+            let subpath = subpath_segments.join("/");
+            let cached_state = self
+                .transition_cache
+                .read()
+                .expect("valid lock")
+                .get(&subpath)
+                .cloned();
+            if let Some(states) = cached_state {
+                states
+            } else {
+                let states = self.step(subpath_segments, start_states);
+                self.transition_cache
+                    .write()
+                    .expect("valid lock")
+                    .insert(subpath, states.clone());
+                states
+            }
+        } else {
+            return start_states;
+        };
+
+        let segment = *path_segments.last().unwrap();
+        let mut next_states = Vec::new();
+        for state_id in states {
+            if let Some(next_id) = self.literal_edges[state_id].get(segment) {
+                next_states.push(*next_id);
+            }
+
+            self.complex_edges[state_id]
+                .values()
+                .filter(|(pattern, _)| pattern.is_match(segment))
+                .for_each(|(_, next_id)| next_states.push(*next_id));
+
+            if let Some(next_id) = self.wildcard_edges[state_id] {
+                next_states.push(next_id);
+            }
+
+            if self.self_loop_edges[state_id] {
+                next_states.push(state_id);
+            }
+        }
+
+        // Automatically traverse epsilon edges
+        let epsilon_nodes = next_states
+            .iter()
+            .flat_map(|state_id| &self.double_star_edges[*state_id])
+            .collect::<Vec<_>>();
+        next_states.extend(epsilon_nodes);
+        next_states
     }
 
     fn add_state(&mut self) -> usize {
