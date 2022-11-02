@@ -6,6 +6,8 @@ use std::{
 
 use anyhow::Result;
 use clap::Parser;
+use rayon::prelude::*;
+
 use nfa::PatternNFA;
 
 mod nfa;
@@ -45,13 +47,13 @@ fn main() -> Result<()> {
         }
 
         if root_path.is_dir() {
-            for entry in walk_files(root_path) {
+            walk_files(root_path).par_bridge().for_each(|entry| {
                 let path = entry
                     .path()
                     .strip_prefix(".")
                     .unwrap_or_else(|_| entry.path());
                 print_owners(&cli, path, &nfa, &rule_ids, &rules);
-            }
+            });
         } else {
             print_owners(&cli, &root_path, &nfa, &rule_ids, &rules);
         }

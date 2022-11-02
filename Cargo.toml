@@ -11,6 +11,7 @@ anyhow = "1.0.66"
 regex = "1.6.0"
 clap = { version = "4.0.18", features = ["derive"] }
 regex-syntax = "0.6.27"
+rayon = "1.5.3"
 
 [profile.release]
 debug = true
