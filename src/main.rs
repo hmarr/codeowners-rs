@@ -46,13 +46,15 @@ fn main() -> Result<()> {
             continue;
         }
 
+        let tl = thread_local::ThreadLocal::new();
         if root_path.is_dir() {
             walk_files(root_path).par_bridge().for_each(|entry| {
+                let thread_nfa = tl.get_or(|| nfa.clone());
                 let path = entry
                     .path()
                     .strip_prefix(".")
                     .unwrap_or_else(|_| entry.path());
-                print_owners(&cli, path, &nfa, &rule_ids, &rules);
+                print_owners(&cli, path, thread_nfa, &rule_ids, &rules);
             });
         } else {
             print_owners(&cli, &root_path, &nfa, &rule_ids, &rules);

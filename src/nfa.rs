@@ -1,10 +1,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
-    sync::RwLock,
+    sync::{Arc, RwLock},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct State {
     matching_patterns: Vec<usize>,
 }
@@ -25,6 +25,7 @@ impl State {
     }
 }
 
+#[derive(Clone)]
 pub struct PatternNFA {
     states: Vec<State>,
 
@@ -45,7 +46,7 @@ pub struct PatternNFA {
     // For each state, there is boolean indicating whether there's a self-loop
     self_loop_edges: Vec<bool>,
 
-    transition_cache: RwLock<HashMap<String, Vec<usize>>>,
+    transition_cache: Arc<RwLock<HashMap<String, Vec<usize>>>>,
 
     next_pattern_id: usize,
 }
@@ -61,7 +62,7 @@ impl PatternNFA {
             complex_edges: vec![BTreeMap::new()],
             double_star_edges: vec![None],
             self_loop_edges: vec![false],
-            transition_cache: RwLock::new(HashMap::new()),
+            transition_cache: Arc::new(RwLock::new(HashMap::new())),
             next_pattern_id: 0,
         }
     }
