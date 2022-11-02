@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -28,34 +28,67 @@ impl State {
 }
 
 #[derive(Debug, Clone)]
-enum GlobTransition {
-    Regex(regex::Regex),
-    Prefix(String),
-    Suffix(String),
-    Contains(String),
+struct Transition {
+    path_segment: String,
+    matcher: TransitionCondition,
+    target: usize,
 }
 
-impl GlobTransition {
+impl Transition {
+    fn new(path_segment: String, target: usize) -> Transition {
+        let matcher = TransitionCondition::new(&path_segment);
+        Self {
+            path_segment,
+            matcher,
+            target,
+        }
+    }
+
+    fn is_match(&self, candidate: &str) -> bool {
+        self.matcher.is_match(&self.path_segment, candidate)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum TransitionCondition {
+    Unconditional,
+    Literal,
+    Prefix,
+    Suffix,
+    Contains,
+    Regex(regex::Regex),
+}
+
+impl TransitionCondition {
     fn new(glob: &str) -> Self {
+        if glob == "*" {
+            return Self::Unconditional;
+        }
+
         let mut chars = glob.chars();
         let leading_star = chars.next().map(|c| c == '*').unwrap_or(false);
         let trailing_star = chars.next_back().map(|c| c == '*').unwrap_or(false);
         let internal_wildcards = has_wildcard(chars);
 
         match (leading_star, trailing_star, internal_wildcards) {
-            (false, true, false) => Self::Prefix(glob.trim_end_matches('*').to_string()),
-            (true, false, false) => Self::Suffix(glob.trim_start_matches('*').to_string()),
-            (true, true, false) => Self::Contains(glob.trim_matches('*').to_string()),
+            (false, false, false) => Self::Literal,
+            (false, true, false) => Self::Prefix,
+            (true, false, false) => Self::Suffix,
+            (true, true, false) => Self::Contains,
             _ => Self::Regex(pattern_to_regex(glob)),
         }
     }
 
-    fn is_match(&self, s: &str) -> bool {
+    fn is_match(&self, pattern: &str, candidate: &str) -> bool {
         match self {
-            Self::Regex(re) => re.is_match(s),
-            Self::Prefix(prefix) => s.starts_with(prefix),
-            Self::Suffix(suffix) => s.ends_with(suffix),
-            Self::Contains(substr) => memmem::find(s.as_bytes(), substr.as_bytes()).is_some(),
+            Self::Unconditional => true,
+            Self::Literal => pattern == candidate,
+            Self::Prefix => candidate.starts_with(pattern.trim_end_matches('*')),
+            Self::Suffix => candidate.ends_with(pattern.trim_start_matches('*')),
+            Self::Contains => {
+                memmem::find(candidate.as_bytes(), pattern.trim_matches('*').as_bytes()).is_some()
+            }
+            Self::Regex(re) => re.is_match(candidate),
         }
     }
 }
@@ -82,22 +115,12 @@ fn pattern_to_regex(pattern: &str) -> regex::Regex {
 pub struct PatternNFA {
     states: Vec<State>,
 
-    // For each state, there is a map of literal path segments to the next state
-    literal_edges: Vec<BTreeMap<String, usize>>,
-
-    // For each state, there is either a wildcard edge to the next state, or None
-    wildcard_edges: Vec<Option<usize>>,
-
-    // For each state, we map complex segments (those including wildcard characters)
-    // to a regex that matches the segment and the next state
-    complex_edges: Vec<BTreeMap<String, (GlobTransition, usize)>>,
+    // The set of possible transitions for each state
+    transitions: Vec<Vec<Transition>>,
 
     // For each state, there is optionally an epsilon edge – that is, an edge that we
     // automatically traverse without consuming any input
     double_star_edges: Vec<Option<usize>>,
-
-    // For each state, there is boolean indicating whether there's a self-loop
-    self_loop_edges: Vec<bool>,
 
     transition_cache: Arc<RwLock<HashMap<String, Vec<usize>>>>,
 
@@ -110,11 +133,8 @@ impl PatternNFA {
     pub fn new() -> Self {
         Self {
             states: vec![State::new()],
-            literal_edges: vec![BTreeMap::new()],
-            wildcard_edges: vec![None],
-            complex_edges: vec![BTreeMap::new()],
+            transitions: vec![Vec::new()],
             double_star_edges: vec![None],
-            self_loop_edges: vec![false],
             transition_cache: Arc::new(RwLock::new(HashMap::new())),
             next_pattern_id: 0,
         }
@@ -151,7 +171,7 @@ impl PatternNFA {
         // If the pattern ends with a trailing slash, we match everything under the
         // directory, but not the directory itself, so we need one more segment
         if trailing_slash {
-            end_state_id = self.add_wildcard_segment(end_state_id);
+            end_state_id = self.add_transition(end_state_id, "*");
         }
 
         // Most patterns are all prefix-matched, which effectively means they end in
@@ -174,48 +194,21 @@ impl PatternNFA {
 
     fn add_pattern_segment(&mut self, prev_state_id: usize, segment: &str) -> usize {
         match segment {
-            "*" => self.add_wildcard_segment(prev_state_id),
             "**" => self.add_double_star_segment(prev_state_id),
-            _ => {
-                if has_wildcard(segment.chars()) {
-                    self.add_complex_segment(prev_state_id, segment)
-                } else {
-                    self.add_literal_segment(prev_state_id, segment)
-                }
-            }
+            _ => self.add_transition(prev_state_id, segment),
         }
     }
 
-    fn add_literal_segment(&mut self, prev_state_id: usize, segment: &str) -> usize {
-        match self.literal_edges[prev_state_id].get(segment) {
-            Some(next_state_id) => *next_state_id,
+    fn add_transition(&mut self, prev_state_id: usize, segment: &str) -> usize {
+        match self.transitions[prev_state_id]
+            .iter()
+            .find(|t| t.path_segment == segment && t.target != prev_state_id)
+        {
+            Some(t) => t.target,
             None => {
                 let state_id = self.add_state();
-                self.literal_edges[prev_state_id].insert(segment.to_owned(), state_id);
-                state_id
-            }
-        }
-    }
-
-    fn add_complex_segment(&mut self, prev_state_id: usize, segment: &str) -> usize {
-        match self.complex_edges[prev_state_id].get(segment) {
-            Some((_, next_state_id)) => *next_state_id,
-            None => {
-                let state_id = self.add_state();
-                let transition = GlobTransition::new(segment);
-                self.complex_edges[prev_state_id]
-                    .insert(segment.to_owned(), (transition, state_id));
-                state_id
-            }
-        }
-    }
-
-    fn add_wildcard_segment(&mut self, prev_state_id: usize) -> usize {
-        match self.wildcard_edges[prev_state_id] {
-            Some(next_state_id) => next_state_id,
-            None => {
-                let state_id = self.add_state();
-                self.wildcard_edges[prev_state_id] = Some(state_id);
+                let transition = Transition::new(segment.to_owned(), state_id);
+                self.transitions[prev_state_id].push(transition);
                 state_id
             }
         }
@@ -225,7 +218,10 @@ impl PatternNFA {
         // Double star segments match zero or more of anything, so there's never a need to
         // have multiple consecutive double star states. Multiple consecutive double star
         // states mean we require multiple path segments, which violoates the gitignore spec
-        if self.self_loop_edges[prev_state_id] {
+        if self.transitions[prev_state_id]
+            .iter()
+            .any(|t| t.path_segment == "*" && t.target == prev_state_id)
+        {
             return prev_state_id;
         }
 
@@ -233,7 +229,7 @@ impl PatternNFA {
             Some(next_state_id) => next_state_id,
             None => {
                 let state_id = self.add_state();
-                self.self_loop_edges[state_id] = true;
+                self.transitions[state_id].push(Transition::new("*".to_owned(), state_id));
                 self.double_star_edges[prev_state_id] = Some(state_id);
                 state_id
             }
@@ -295,22 +291,10 @@ impl PatternNFA {
         let segment = *path_segments.last().unwrap();
         let mut next_states = Vec::new();
         for state_id in states {
-            if let Some(next_id) = self.literal_edges[state_id].get(segment) {
-                next_states.push(*next_id);
-            }
-
-            self.complex_edges[state_id]
-                .values()
-                .filter(|(transition, _)| transition.is_match(segment))
-                .for_each(|(_, next_id)| next_states.push(*next_id));
-
-            if let Some(next_id) = self.wildcard_edges[state_id] {
-                next_states.push(next_id);
-            }
-
-            if self.self_loop_edges[state_id] {
-                next_states.push(state_id);
-            }
+            self.transitions[state_id]
+                .iter()
+                .filter(|transition| transition.is_match(segment))
+                .for_each(|transition| next_states.push(transition.target));
         }
 
         // Automatically traverse epsilon edges
@@ -327,11 +311,8 @@ impl PatternNFA {
 
         let state = State::new();
         self.states.push(state);
-        self.literal_edges.push(BTreeMap::new());
-        self.complex_edges.push(BTreeMap::new());
-        self.wildcard_edges.push(None);
+        self.transitions.push(Vec::new());
         self.double_star_edges.push(None);
-        self.self_loop_edges.push(false);
 
         id
     }
@@ -350,34 +331,16 @@ impl PatternNFA {
             if state.terminal() {
                 dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
             }
-            for (segment, next_state_id) in self.literal_edges[state_id].iter() {
+            for transition in self.transitions[state_id].iter() {
                 dot.push_str(&format!(
                     "  s{} -> s{} [label=\"{}\"];\n",
-                    state_id, next_state_id, segment
-                ));
-            }
-            for (segment, (_, next_state_id)) in self.complex_edges[state_id].iter() {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"{}\"];\n",
-                    state_id, next_state_id, segment
-                ));
-            }
-            if let Some(next_state_id) = self.wildcard_edges[state_id] {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"*\"];\n",
-                    state_id, next_state_id
+                    state_id, transition.target, transition.path_segment
                 ));
             }
             if let Some(next_state_id) = self.double_star_edges[state_id] {
                 dot.push_str(&format!(
                     "  s{} -> s{} [label=\"ε\"];\n",
                     state_id, next_state_id
-                ));
-            }
-            if self.self_loop_edges[state_id] {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"*\"];\n",
-                    state_id, state_id
                 ));
             }
         }
