@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use nfa::PatternNFA;
@@ -48,7 +49,10 @@ fn main() -> Result<()> {
 
         let tl = thread_local::ThreadLocal::new();
         if root_path.is_dir() {
-            walk_files(root_path).par_bridge().for_each(|entry| {
+            let file_iter = walk_files(root_path);
+            #[cfg(feature = "parallel")]
+            let file_iter = file_iter.par_bridge();
+            file_iter.for_each(|entry| {
                 let thread_nfa = tl.get_or(|| nfa.clone());
                 let path = entry
                     .path()

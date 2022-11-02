@@ -4,6 +4,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use memchr::memmem;
+
 #[derive(Debug, Clone)]
 struct State {
     matching_patterns: Vec<usize>,
@@ -25,6 +27,57 @@ impl State {
     }
 }
 
+#[derive(Debug, Clone)]
+enum GlobTransition {
+    Regex(regex::Regex),
+    Prefix(String),
+    Suffix(String),
+    Contains(String),
+}
+
+impl GlobTransition {
+    fn new(glob: &str) -> Self {
+        let mut chars = glob.chars();
+        let leading_star = chars.next().map(|c| c == '*').unwrap_or(false);
+        let trailing_star = chars.next_back().map(|c| c == '*').unwrap_or(false);
+        let internal_wildcards = has_wildcard(chars);
+
+        match (leading_star, trailing_star, internal_wildcards) {
+            (false, true, false) => Self::Prefix(glob.trim_end_matches('*').to_string()),
+            (true, false, false) => Self::Suffix(glob.trim_start_matches('*').to_string()),
+            (true, true, false) => Self::Contains(glob.trim_matches('*').to_string()),
+            _ => Self::Regex(pattern_to_regex(glob)),
+        }
+    }
+
+    fn is_match(&self, s: &str) -> bool {
+        match self {
+            Self::Regex(re) => re.is_match(s),
+            Self::Prefix(prefix) => s.starts_with(prefix),
+            Self::Suffix(suffix) => s.ends_with(suffix),
+            Self::Contains(substr) => memmem::find(s.as_bytes(), substr.as_bytes()).is_some(),
+        }
+    }
+}
+
+fn pattern_to_regex(pattern: &str) -> regex::Regex {
+    let mut regex = r#"\A"#.to_owned();
+    for c in pattern.chars() {
+        match c {
+            '*' => regex.push_str(r#"[^/]*"#),
+            '?' => regex.push_str(r#"[^/]"#),
+            _ => {
+                if regex_syntax::is_meta_character(c) {
+                    regex.push('\\');
+                }
+                regex.push(c);
+            }
+        }
+    }
+    regex.push_str(r#"\z"#);
+    regex::Regex::new(&regex).unwrap_or_else(|_| panic!("invalid regex: {}", regex))
+}
+
 #[derive(Clone)]
 pub struct PatternNFA {
     states: Vec<State>,
@@ -37,7 +90,7 @@ pub struct PatternNFA {
 
     // For each state, we map complex segments (those including wildcard characters)
     // to a regex that matches the segment and the next state
-    complex_edges: Vec<BTreeMap<String, (regex::Regex, usize)>>,
+    complex_edges: Vec<BTreeMap<String, (GlobTransition, usize)>>,
 
     // For each state, there is optionally an epsilon edge – that is, an edge that we
     // automatically traverse without consuming any input
@@ -124,7 +177,7 @@ impl PatternNFA {
             "*" => self.add_wildcard_segment(prev_state_id),
             "**" => self.add_double_star_segment(prev_state_id),
             _ => {
-                if segment.chars().any(|c| c == '*' || c == '?') {
+                if has_wildcard(segment.chars()) {
                     self.add_complex_segment(prev_state_id, segment)
                 } else {
                     self.add_literal_segment(prev_state_id, segment)
@@ -149,23 +202,9 @@ impl PatternNFA {
             Some((_, next_state_id)) => *next_state_id,
             None => {
                 let state_id = self.add_state();
-                let mut segment_pattern = r#"\A"#.to_owned();
-                for c in segment.chars() {
-                    match c {
-                        '*' => segment_pattern.push_str(r#"[^/]*"#),
-                        '?' => segment_pattern.push_str(r#"[^/]"#),
-                        _ => {
-                            if regex_syntax::is_meta_character(c) {
-                                segment_pattern.push('\\');
-                            }
-                            segment_pattern.push(c);
-                        }
-                    }
-                }
-                segment_pattern.push_str(r#"\z"#);
-                let segment_regex = regex::Regex::new(&segment_pattern).unwrap();
+                let transition = GlobTransition::new(segment);
                 self.complex_edges[prev_state_id]
-                    .insert(segment.to_owned(), (segment_regex, state_id));
+                    .insert(segment.to_owned(), (transition, state_id));
                 state_id
             }
         }
@@ -262,7 +301,7 @@ impl PatternNFA {
 
             self.complex_edges[state_id]
                 .values()
-                .filter(|(pattern, _)| pattern.is_match(segment))
+                .filter(|(transition, _)| transition.is_match(segment))
                 .for_each(|(_, next_id)| next_states.push(*next_id));
 
             if let Some(next_id) = self.wildcard_edges[state_id] {
@@ -345,6 +384,10 @@ impl PatternNFA {
         dot.push_str("}\n");
         dot
     }
+}
+
+fn has_wildcard(mut char_iter: impl Iterator<Item = char>) -> bool {
+    char_iter.any(|c| c == '*' || c == '?')
 }
 
 #[cfg(test)]
