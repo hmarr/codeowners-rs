@@ -332,29 +332,6 @@ fn has_wildcard(mut char_iter: impl Iterator<Item = char>) -> bool {
     char_iter.any(|c| c == '*' || c == '?')
 }
 
-fn generate_dot(nfa: &PatternNFA) -> String {
-    let mut dot = String::from("digraph G {\n  rankdir=\"LR\"\n");
-    for (state_id, state) in nfa.states.iter().enumerate() {
-        if state.terminal() {
-            dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
-        }
-        for transition in state.transitions.iter() {
-            dot.push_str(&format!(
-                "  s{} -> s{} [label=\"{}\"];\n",
-                state_id, *transition.target, transition.path_segment
-            ));
-        }
-        if let Some(next_state_id) = nfa.states[state_id].epsilon_transition {
-            dot.push_str(&format!(
-                "  s{} -> s{} [label=\"ε\"];\n",
-                state_id, *next_state_id
-            ));
-        }
-    }
-    dot.push_str("}\n");
-    dot
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,11 +388,6 @@ mod tests {
             nfa.add_pattern("/script/foo"),
             nfa.add_pattern("script/foo"),
         ];
-        println!("{}", generate_dot(&nfa));
-
-        // BUG!
-        // if we start with /script, we'll generate an anchored node
-        // if we then add a pattern that begins with script, we'll unanchor the node
 
         assert_eq!(
             nfa.matching_patterns("script/foo"),
@@ -428,22 +400,6 @@ mod tests {
     }
 
     #[test]
-    fn test_double_star_bug() {
-        let mut nfa = PatternNFA::new();
-        let patterns = [nfa.add_pattern("/foo/**/bar"), nfa.add_pattern("/foo/bar")];
-        println!("{}", generate_dot(&nfa));
-
-        assert_eq!(
-            nfa.matching_patterns("foo/bar"),
-            HashSet::from([patterns[0], patterns[1]])
-        );
-        assert_eq!(
-            nfa.matching_patterns("foo/baz/bar"),
-            HashSet::from([patterns[0]])
-        );
-    }
-
-    #[test]
     fn test_wildcard_matches() {
         let mut nfa = PatternNFA::new();
         let patterns = [
@@ -452,8 +408,6 @@ mod tests {
             nfa.add_pattern("*/*/mod.rs"),
             nfa.add_pattern("src/parser/*/"),
         ];
-
-        println!("{}", generate_dot(&nfa));
 
         assert_eq!(
             nfa.matching_patterns("src/parser/mod.rs"),
@@ -484,8 +438,6 @@ mod tests {
         nfa.add_pattern("/mammals/*");
         nfa.add_pattern("/fish/*/");
 
-        println!("{}", generate_dot(&nfa));
-
         assert!(!nfa.matches("mammals"));
         assert!(nfa.matches("mammals/equus"));
         assert!(!nfa.matches("mammals/equus/zebra"));
@@ -503,8 +455,6 @@ mod tests {
             nfa.add_pattern("/src/p*/*.*"),
         ];
 
-        println!("{}", generate_dot(&nfa));
-
         assert_eq!(
             nfa.matching_patterns("src/parser/mod.rs"),
             HashSet::from([patterns[0], patterns[1]])
@@ -521,8 +471,6 @@ mod tests {
         let mut nfa = PatternNFA::new();
         let patterns = [nfa.add_pattern("/**/baz"), nfa.add_pattern("/**/bar/baz")];
 
-        println!("{}", generate_dot(&nfa));
-
         assert_eq!(
             nfa.matching_patterns("x/y/baz"),
             HashSet::from([patterns[0]])
@@ -531,18 +479,26 @@ mod tests {
             nfa.matching_patterns("x/bar/baz"),
             HashSet::from([patterns[0], patterns[1]])
         );
-
         assert_eq!(nfa.matching_patterns("baz"), HashSet::from([patterns[0]]));
     }
 
     #[test]
     fn test_infix_double_star_matches() {
         let mut nfa = PatternNFA::new();
-        nfa.add_pattern("/foo/**/qux");
+        let patterns = [nfa.add_pattern("/foo/**/qux"), nfa.add_pattern("/foo/qux")];
 
-        assert!(nfa.matches("foo/qux"));
-        assert!(nfa.matches("foo/bar/qux"));
-        assert!(nfa.matches("foo/bar/baz/qux"));
+        assert_eq!(
+            nfa.matching_patterns("foo/qux"),
+            HashSet::from([patterns[0], patterns[1]])
+        );
+        assert_eq!(
+            nfa.matching_patterns("foo/bar/qux"),
+            HashSet::from([patterns[0]])
+        );
+        assert_eq!(
+            nfa.matching_patterns("foo/bar/baz/qux"),
+            HashSet::from([patterns[0]])
+        );
         assert!(!nfa.matches("foo/bar"));
         assert!(!nfa.matches("bar/qux"));
     }
@@ -552,10 +508,7 @@ mod tests {
         let mut nfa = PatternNFA::new();
         let patterns = [nfa.add_pattern("foo/**"), nfa.add_pattern("**")];
 
-        println!("{}", generate_dot(&nfa));
-
         assert_eq!(nfa.matching_patterns("bar"), HashSet::from([patterns[1]]));
-
         assert_eq!(
             nfa.matching_patterns("x/y/baz"),
             HashSet::from([patterns[1]])
@@ -564,5 +517,29 @@ mod tests {
             nfa.matching_patterns("foo/bar/baz"),
             HashSet::from([patterns[0], patterns[1]])
         );
+    }
+
+    #[allow(dead_code)]
+    fn generate_dot(nfa: &PatternNFA) -> String {
+        let mut dot = String::from("digraph G {\n  rankdir=\"LR\"\n");
+        for (state_id, state) in nfa.states.iter().enumerate() {
+            if state.terminal() {
+                dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
+            }
+            for transition in state.transitions.iter() {
+                dot.push_str(&format!(
+                    "  s{} -> s{} [label=\"{}\"];\n",
+                    state_id, *transition.target, transition.path_segment
+                ));
+            }
+            if let Some(next_state_id) = nfa.states[state_id].epsilon_transition {
+                dot.push_str(&format!(
+                    "  s{} -> s{} [label=\"ε\"];\n",
+                    state_id, *next_state_id
+                ));
+            }
+        }
+        dot.push_str("}\n");
+        dot
     }
 }
