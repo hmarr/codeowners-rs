@@ -1,20 +1,36 @@
 use std::{
     collections::{HashMap, HashSet},
+    ops::Deref,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
 
 use memchr::memmem;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+struct StateId(usize);
+
+impl Deref for StateId {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 struct State {
     matching_patterns: Vec<usize>,
+    transitions: Vec<Transition>,
+    epsilon_transition: Option<StateId>,
 }
 
 impl State {
     fn new() -> Self {
         Self {
             matching_patterns: Vec::new(),
+            transitions: Vec::new(),
+            epsilon_transition: None,
         }
     }
 
@@ -31,11 +47,11 @@ impl State {
 struct Transition {
     path_segment: String,
     matcher: TransitionCondition,
-    target: usize,
+    target: StateId,
 }
 
 impl Transition {
-    fn new(path_segment: String, target: usize) -> Transition {
+    fn new(path_segment: String, target: StateId) -> Transition {
         let matcher = TransitionCondition::new(&path_segment);
         Self {
             path_segment,
@@ -114,27 +130,16 @@ fn pattern_to_regex(pattern: &str) -> regex::Regex {
 #[derive(Clone)]
 pub struct PatternNFA {
     states: Vec<State>,
-
-    // The set of possible transitions for each state
-    transitions: Vec<Vec<Transition>>,
-
-    // For each state, there is optionally an epsilon edge – that is, an edge that we
-    // automatically traverse without consuming any input
-    double_star_edges: Vec<Option<usize>>,
-
-    transition_cache: Arc<RwLock<HashMap<String, Vec<usize>>>>,
-
+    transition_cache: Arc<RwLock<HashMap<String, Vec<StateId>>>>,
     next_pattern_id: usize,
 }
 
 impl PatternNFA {
-    const START_STATE: usize = 0;
+    const START_STATE: StateId = StateId(0);
 
     pub fn new() -> Self {
         Self {
             states: vec![State::new()],
-            transitions: vec![Vec::new()],
-            double_star_edges: vec![None],
             transition_cache: Arc::new(RwLock::new(HashMap::new())),
             next_pattern_id: 0,
         }
@@ -149,7 +154,7 @@ impl PatternNFA {
         let pattern = match pattern.strip_prefix('/') {
             Some(pattern) => pattern,
             None => {
-                start_state_id = self.add_double_star_segment(Self::START_STATE);
+                start_state_id = self.add_epsilon_transition(Self::START_STATE);
                 pattern
             }
         };
@@ -164,8 +169,9 @@ impl PatternNFA {
         let segments = pattern.split('/').collect::<Vec<_>>();
         let mut end_state_id = segments
             .iter()
-            .fold(start_state_id, |prev_state_id, segment| {
-                self.add_pattern_segment(prev_state_id, segment)
+            .fold(start_state_id, |prev_state_id, segment| match *segment {
+                "**" => self.add_epsilon_transition(prev_state_id),
+                _ => self.add_transition(prev_state_id, segment),
             });
 
         // If the pattern ends with a trailing slash, we match everything under the
@@ -181,26 +187,19 @@ impl PatternNFA {
         // CODEOWNERS globbing rules and the .gitignore rules.
         if let Some(&last_segment) = segments.last() {
             if last_segment != "*" {
-                end_state_id = self.add_double_star_segment(end_state_id);
+                end_state_id = self.add_epsilon_transition(end_state_id);
             }
         }
 
         // Mark the final state as the terminal state for this pattern
-        self.state_mut(end_state_id)
-            .set_terminal_for_pattern(pattern_id);
+        self.states[*end_state_id].set_terminal_for_pattern(pattern_id);
 
         pattern_id
     }
 
-    fn add_pattern_segment(&mut self, prev_state_id: usize, segment: &str) -> usize {
-        match segment {
-            "**" => self.add_double_star_segment(prev_state_id),
-            _ => self.add_transition(prev_state_id, segment),
-        }
-    }
-
-    fn add_transition(&mut self, prev_state_id: usize, segment: &str) -> usize {
-        match self.transitions[prev_state_id]
+    fn add_transition(&mut self, prev_state_id: StateId, segment: &str) -> StateId {
+        match self.states[*prev_state_id]
+            .transitions
             .iter()
             .find(|t| t.path_segment == segment && t.target != prev_state_id)
         {
@@ -208,29 +207,32 @@ impl PatternNFA {
             None => {
                 let state_id = self.add_state();
                 let transition = Transition::new(segment.to_owned(), state_id);
-                self.transitions[prev_state_id].push(transition);
+                self.states[*prev_state_id].transitions.push(transition);
                 state_id
             }
         }
     }
 
-    fn add_double_star_segment(&mut self, prev_state_id: usize) -> usize {
+    fn add_epsilon_transition(&mut self, prev_state_id: StateId) -> StateId {
         // Double star segments match zero or more of anything, so there's never a need to
         // have multiple consecutive double star states. Multiple consecutive double star
         // states mean we require multiple path segments, which violoates the gitignore spec
-        if self.transitions[prev_state_id]
+        if self.states[*prev_state_id]
+            .transitions
             .iter()
             .any(|t| t.path_segment == "*" && t.target == prev_state_id)
         {
             return prev_state_id;
         }
 
-        match self.double_star_edges[prev_state_id] {
+        match self.states[*prev_state_id].epsilon_transition {
             Some(next_state_id) => next_state_id,
             None => {
                 let state_id = self.add_state();
-                self.transitions[state_id].push(Transition::new("*".to_owned(), state_id));
-                self.double_star_edges[prev_state_id] = Some(state_id);
+                self.states[*state_id]
+                    .transitions
+                    .push(Transition::new("*".to_owned(), state_id));
+                self.states[*prev_state_id].epsilon_transition = Some(state_id);
                 state_id
             }
         }
@@ -242,7 +244,7 @@ impl PatternNFA {
 
     pub fn matching_patterns(&self, path: impl Into<PathBuf>) -> HashSet<usize> {
         let mut states = vec![Self::START_STATE];
-        if let Some(epsilon_node_id) = self.double_star_edges[Self::START_STATE] {
+        if let Some(epsilon_node_id) = self.states[*Self::START_STATE].epsilon_transition {
             states.push(epsilon_node_id);
         }
 
@@ -264,7 +266,7 @@ impl PatternNFA {
         matches
     }
 
-    pub fn step(&self, path_segments: &[&str], start_states: Vec<usize>) -> Vec<usize> {
+    fn step(&self, path_segments: &[&str], start_states: Vec<StateId>) -> Vec<StateId> {
         let states = if !path_segments.is_empty() {
             let subpath_segments = &path_segments[..path_segments.len() - 1];
             let subpath = subpath_segments.join("/");
@@ -291,7 +293,8 @@ impl PatternNFA {
         let segment = *path_segments.last().unwrap();
         let mut next_states = Vec::new();
         for state_id in states {
-            self.transitions[state_id]
+            self.state(state_id)
+                .transitions
                 .iter()
                 .filter(|transition| transition.is_match(segment))
                 .for_each(|transition| next_states.push(transition.target));
@@ -300,57 +303,56 @@ impl PatternNFA {
         // Automatically traverse epsilon edges
         let epsilon_nodes = next_states
             .iter()
-            .flat_map(|state_id| &self.double_star_edges[*state_id])
+            .flat_map(|&state_id| &self.state(state_id).epsilon_transition)
             .collect::<Vec<_>>();
         next_states.extend(epsilon_nodes);
         next_states
     }
 
-    fn add_state(&mut self) -> usize {
+    fn add_state(&mut self) -> StateId {
         let id = self.states.len();
 
         let state = State::new();
         self.states.push(state);
-        self.transitions.push(Vec::new());
-        self.double_star_edges.push(None);
 
-        id
+        StateId(id)
     }
 
-    fn state(&self, id: usize) -> &State {
-        &self.states[id]
+    #[inline]
+    fn state(&self, id: StateId) -> &State {
+        &self.states[*id]
     }
 
-    fn state_mut(&mut self, id: usize) -> &mut State {
-        &mut self.states[id]
-    }
-
-    fn generate_dot(&self) -> String {
-        let mut dot = String::from("digraph G {\n  rankdir=\"LR\"\n");
-        for (state_id, state) in self.states.iter().enumerate() {
-            if state.terminal() {
-                dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
-            }
-            for transition in self.transitions[state_id].iter() {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"{}\"];\n",
-                    state_id, transition.target, transition.path_segment
-                ));
-            }
-            if let Some(next_state_id) = self.double_star_edges[state_id] {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"ε\"];\n",
-                    state_id, next_state_id
-                ));
-            }
-        }
-        dot.push_str("}\n");
-        dot
+    fn state_mut(&mut self, id: StateId) -> &mut State {
+        &mut self.states[*id]
     }
 }
 
 fn has_wildcard(mut char_iter: impl Iterator<Item = char>) -> bool {
     char_iter.any(|c| c == '*' || c == '?')
+}
+
+fn generate_dot(nfa: &PatternNFA) -> String {
+    let mut dot = String::from("digraph G {\n  rankdir=\"LR\"\n");
+    for (state_id, state) in nfa.states.iter().enumerate() {
+        if state.terminal() {
+            dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
+        }
+        for transition in state.transitions.iter() {
+            dot.push_str(&format!(
+                "  s{} -> s{} [label=\"{}\"];\n",
+                state_id, *transition.target, transition.path_segment
+            ));
+        }
+        if let Some(next_state_id) = nfa.states[state_id].epsilon_transition {
+            dot.push_str(&format!(
+                "  s{} -> s{} [label=\"ε\"];\n",
+                state_id, *next_state_id
+            ));
+        }
+    }
+    dot.push_str("}\n");
+    dot
 }
 
 #[cfg(test)]
@@ -409,7 +411,7 @@ mod tests {
             nfa.add_pattern("/script/foo"),
             nfa.add_pattern("script/foo"),
         ];
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         // BUG!
         // if we start with /script, we'll generate an anchored node
@@ -429,7 +431,7 @@ mod tests {
     fn test_double_star_bug() {
         let mut nfa = PatternNFA::new();
         let patterns = [nfa.add_pattern("/foo/**/bar"), nfa.add_pattern("/foo/bar")];
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         assert_eq!(
             nfa.matching_patterns("foo/bar"),
@@ -451,7 +453,7 @@ mod tests {
             nfa.add_pattern("src/parser/*/"),
         ];
 
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         assert_eq!(
             nfa.matching_patterns("src/parser/mod.rs"),
@@ -482,7 +484,7 @@ mod tests {
         nfa.add_pattern("/mammals/*");
         nfa.add_pattern("/fish/*/");
 
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         assert!(!nfa.matches("mammals"));
         assert!(nfa.matches("mammals/equus"));
@@ -501,7 +503,7 @@ mod tests {
             nfa.add_pattern("/src/p*/*.*"),
         ];
 
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         assert_eq!(
             nfa.matching_patterns("src/parser/mod.rs"),
@@ -519,7 +521,7 @@ mod tests {
         let mut nfa = PatternNFA::new();
         let patterns = [nfa.add_pattern("/**/baz"), nfa.add_pattern("/**/bar/baz")];
 
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         assert_eq!(
             nfa.matching_patterns("x/y/baz"),
@@ -550,7 +552,7 @@ mod tests {
         let mut nfa = PatternNFA::new();
         let patterns = [nfa.add_pattern("foo/**"), nfa.add_pattern("**")];
 
-        println!("{}", nfa.generate_dot());
+        println!("{}", generate_dot(&nfa));
 
         assert_eq!(nfa.matching_patterns("bar"), HashSet::from([patterns[1]]));
 
