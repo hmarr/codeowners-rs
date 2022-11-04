@@ -1,20 +1,17 @@
 use std::{
     collections::{HashMap, HashSet},
-    ops::Deref,
-    path::PathBuf,
+    path::Path,
     sync::{Arc, RwLock},
 };
 
 use memchr::memmem;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-struct StateId(usize);
+struct StateId(u32);
 
-impl Deref for StateId {
-    type Target = usize;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl From<StateId> for usize {
+    fn from(id: StateId) -> usize {
+        id.0 as usize
     }
 }
 
@@ -32,6 +29,10 @@ impl State {
             transitions: Vec::new(),
             epsilon_transition: None,
         }
+    }
+
+    fn add_transition(&mut self, transition: Transition) {
+        self.transitions.push(transition);
     }
 
     fn terminal(&self) -> bool {
@@ -192,24 +193,23 @@ impl PatternNFA {
         }
 
         // Mark the final state as the terminal state for this pattern
-        self.states[*end_state_id].set_terminal_for_pattern(pattern_id);
+        self.state_mut(end_state_id)
+            .set_terminal_for_pattern(pattern_id);
 
         pattern_id
     }
 
     fn add_transition(&mut self, prev_state_id: StateId, segment: &str) -> StateId {
-        match self.states[*prev_state_id]
-            .transitions
-            .iter()
-            .find(|t| t.path_segment == segment && t.target != prev_state_id)
-        {
-            Some(t) => t.target,
-            None => {
-                let state_id = self.add_state();
-                let transition = Transition::new(segment.to_owned(), state_id);
-                self.states[*prev_state_id].transitions.push(transition);
-                state_id
-            }
+        let existing_transition = self
+            .transitions(prev_state_id)
+            .find(|t| t.path_segment == segment && t.target != prev_state_id);
+        if let Some(t) = existing_transition {
+            t.target
+        } else {
+            let state_id = self.add_state();
+            self.state_mut(prev_state_id)
+                .add_transition(Transition::new(segment.to_owned(), state_id));
+            state_id
         }
     }
 
@@ -217,48 +217,35 @@ impl PatternNFA {
         // Double star segments match zero or more of anything, so there's never a need to
         // have multiple consecutive double star states. Multiple consecutive double star
         // states mean we require multiple path segments, which violoates the gitignore spec
-        if self.states[*prev_state_id]
-            .transitions
-            .iter()
-            .any(|t| t.path_segment == "*" && t.target == prev_state_id)
-        {
+        let has_existing_transition = self
+            .transitions(prev_state_id)
+            .any(|t| t.path_segment == "*" && t.target == prev_state_id);
+        if has_existing_transition {
             return prev_state_id;
         }
 
-        match self.states[*prev_state_id].epsilon_transition {
+        match self.state(prev_state_id).epsilon_transition {
             Some(next_state_id) => next_state_id,
             None => {
                 let state_id = self.add_state();
-                self.states[*state_id]
-                    .transitions
-                    .push(Transition::new("*".to_owned(), state_id));
-                self.states[*prev_state_id].epsilon_transition = Some(state_id);
+                self.state_mut(state_id)
+                    .add_transition(Transition::new("*".to_owned(), state_id));
+                self.state_mut(prev_state_id).epsilon_transition = Some(state_id);
                 state_id
             }
         }
     }
 
-    pub fn matches(&self, path: impl Into<PathBuf>) -> bool {
+    pub fn is_match(&self, path: impl AsRef<Path>) -> bool {
         !self.matching_patterns(path).is_empty()
     }
 
-    pub fn matching_patterns(&self, path: impl Into<PathBuf>) -> HashSet<usize> {
-        let mut states = vec![Self::START_STATE];
-        if let Some(epsilon_node_id) = self.states[*Self::START_STATE].epsilon_transition {
-            states.push(epsilon_node_id);
-        }
-
-        states = self.step(
-            &path
-                .into()
-                .iter()
-                .map(|c| c.to_str().unwrap())
-                .collect::<Vec<_>>(),
-            states,
-        );
+    pub fn matching_patterns(&self, path: impl AsRef<Path>) -> HashSet<usize> {
+        let components = path.as_ref().iter().map(|c| c.to_str().unwrap());
+        let final_states = self.step(&components.collect::<Vec<_>>(), self.initial_states());
 
         let mut matches = HashSet::new();
-        for state_id in states {
+        for state_id in final_states {
             if self.state(state_id).terminal() {
                 matches.extend(self.state(state_id).matching_patterns.iter().copied());
             }
@@ -315,16 +302,29 @@ impl PatternNFA {
         let state = State::new();
         self.states.push(state);
 
-        StateId(id)
+        StateId(id as u32)
     }
 
     #[inline]
     fn state(&self, id: StateId) -> &State {
-        &self.states[*id]
+        &self.states[usize::from(id)]
     }
 
+    #[inline]
     fn state_mut(&mut self, id: StateId) -> &mut State {
-        &mut self.states[*id]
+        &mut self.states[usize::from(id)]
+    }
+
+    fn initial_states(&self) -> Vec<StateId> {
+        let mut states = vec![Self::START_STATE];
+        if let Some(epsilon_node_id) = self.state(Self::START_STATE).epsilon_transition {
+            states.push(epsilon_node_id);
+        }
+        states
+    }
+
+    fn transitions(&self, state_id: StateId) -> impl Iterator<Item = &Transition> {
+        self.state(state_id).transitions.iter()
     }
 }
 
@@ -358,12 +358,12 @@ mod tests {
             nfa.matching_patterns("lib/parser/mod.rs"),
             HashSet::from([patterns[3]])
         );
-        assert!(!nfa.matches("lib/parser/util.rs"));
+        assert!(!nfa.is_match("lib/parser/util.rs"));
         assert_eq!(
             nfa.matching_patterns("src/lexer/mod.rs"),
             HashSet::from([patterns[3]])
         );
-        assert!(!nfa.matches("src/parser/mod.go"));
+        assert!(!nfa.is_match("src/parser/mod.go"));
     }
 
     #[test]
@@ -438,13 +438,13 @@ mod tests {
         nfa.add_pattern("/mammals/*");
         nfa.add_pattern("/fish/*/");
 
-        assert!(!nfa.matches("mammals"));
-        assert!(nfa.matches("mammals/equus"));
-        assert!(!nfa.matches("mammals/equus/zebra"));
+        assert!(!nfa.is_match("mammals"));
+        assert!(nfa.is_match("mammals/equus"));
+        assert!(!nfa.is_match("mammals/equus/zebra"));
 
-        assert!(!nfa.matches("fish"));
-        assert!(!nfa.matches("fish/gaddus"));
-        assert!(nfa.matches("fish/gaddus/cod"));
+        assert!(!nfa.is_match("fish"));
+        assert!(!nfa.is_match("fish/gaddus"));
+        assert!(nfa.is_match("fish/gaddus/cod"));
     }
 
     #[test]
@@ -463,7 +463,7 @@ mod tests {
             nfa.matching_patterns("src/p/lib.go"),
             HashSet::from([patterns[1]])
         );
-        assert!(!nfa.matches("src/parser/README"));
+        assert!(!nfa.is_match("src/parser/README"));
     }
 
     #[test]
@@ -499,8 +499,8 @@ mod tests {
             nfa.matching_patterns("foo/bar/baz/qux"),
             HashSet::from([patterns[0]])
         );
-        assert!(!nfa.matches("foo/bar"));
-        assert!(!nfa.matches("bar/qux"));
+        assert!(!nfa.is_match("foo/bar"));
+        assert!(!nfa.is_match("bar/qux"));
     }
 
     #[test]
@@ -529,13 +529,13 @@ mod tests {
             for transition in state.transitions.iter() {
                 dot.push_str(&format!(
                     "  s{} -> s{} [label=\"{}\"];\n",
-                    state_id, *transition.target, transition.path_segment
+                    state_id, transition.target.0, transition.path_segment
                 ));
             }
             if let Some(next_state_id) = nfa.states[state_id].epsilon_transition {
                 dot.push_str(&format!(
                     "  s{} -> s{} [label=\"ε\"];\n",
-                    state_id, *next_state_id
+                    state_id, next_state_id.0
                 ));
             }
         }
