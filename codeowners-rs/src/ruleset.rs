@@ -20,7 +20,7 @@ impl RuleSet {
             .collect()
     }
 
-    pub fn owners(&self, path: impl AsRef<Path>) -> Option<Vec<String>> {
+    pub fn owners(&self, path: impl AsRef<Path>) -> Option<&[String]> {
         self.pattern_set
             .matching_patterns(path)
             .iter()
@@ -29,7 +29,7 @@ impl RuleSet {
                 if self.rules[idx].owners.is_empty() {
                     None
                 } else {
-                    Some(self.rules[idx].owners.clone()) // TODO remove clone
+                    Some(self.rules[idx].owners.as_ref())
                 }
             })
     }

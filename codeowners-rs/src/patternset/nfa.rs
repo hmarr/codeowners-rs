@@ -113,12 +113,10 @@ impl Nfa {
         StateId(id as u32)
     }
 
-    #[inline]
     pub(crate) fn state(&self, id: StateId) -> &State {
         &self.states[usize::from(id)]
     }
 
-    #[inline]
     fn state_mut(&mut self, id: StateId) -> &mut State {
         &mut self.states[usize::from(id)]
     }
