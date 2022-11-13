@@ -1,7 +1,6 @@
 use std::io::{BufRead, BufReader, Read};
 
-#[derive(Debug)]
-
+#[derive(Debug, Clone)]
 pub struct Rule {
     pub pattern: String,
     pub owners: Vec<String>,

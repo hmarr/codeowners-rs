@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
 };
@@ -9,36 +8,50 @@ use clap::Parser;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
-use codeowners_rs::{nfa::PatternNFA, parser};
+use codeowners_rs::RuleSetBuilder;
+use codeowners_rs::{parser, RuleSet};
 
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
     paths: Vec<PathBuf>,
 
+    #[clap(short = 'f', long = "file")]
+    codeowners_file: Option<PathBuf>,
+
     #[arg(long)]
     all_matching_rules: bool,
+}
+
+impl Cli {
+    fn codeowners_path(&self) -> PathBuf {
+        self.codeowners_file
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("./CODEOWNERS"))
+    }
+
+    fn root_paths(&self) -> Vec<PathBuf> {
+        if self.paths.is_empty() {
+            vec![PathBuf::from(".")]
+        } else {
+            self.paths.clone()
+        }
+    }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let rules = parser::parse_rules(File::open("./CODEOWNERS")?);
+    let codeowners_path = cli.codeowners_path();
+    let rules = parser::parse_rules(File::open(codeowners_path)?);
 
-    let mut nfa = PatternNFA::new();
-    let rule_ids = rules
-        .iter()
-        .enumerate()
-        .map(|(i, rule)| (nfa.add_pattern(&rule.pattern), i))
-        .collect::<HashMap<_, _>>();
+    let mut builder = RuleSetBuilder::new();
+    for rule in rules {
+        builder.add(rule);
+    }
+    let ruleset = builder.build();
 
-    let root_paths = if cli.paths.is_empty() {
-        vec![PathBuf::from(".")]
-    } else {
-        cli.paths.clone()
-    };
-
-    for root_path in root_paths {
+    for root_path in cli.root_paths() {
         if !root_path.exists() {
             eprintln!("error: path does not exist: {}", root_path.display());
             continue;
@@ -50,58 +63,40 @@ fn main() -> Result<()> {
             #[cfg(feature = "rayon")]
             let file_iter = file_iter.par_bridge();
             file_iter.for_each(|entry| {
-                let thread_nfa = tl.get_or(|| nfa.clone());
+                let thread_local_ruleset = tl.get_or(|| ruleset.clone());
                 let path = entry
                     .path()
                     .strip_prefix(".")
                     .unwrap_or_else(|_| entry.path());
-                print_owners(&cli, path, thread_nfa, &rule_ids, &rules);
+                print_owners(&cli, path, thread_local_ruleset);
             });
         } else {
-            print_owners(&cli, &root_path, &nfa, &rule_ids, &rules);
+            print_owners(&cli, &root_path, &ruleset);
         }
     }
 
     Ok(())
 }
 
-fn print_owners(
-    cli: &Cli,
-    path: impl AsRef<Path>,
-    nfa: &PatternNFA,
-    rule_ids: &HashMap<usize, usize>,
-    rules: &[parser::Rule],
-) {
+fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
     let path = path
         .as_ref()
         .strip_prefix(".")
         .unwrap_or_else(|_| path.as_ref());
-    let matches = nfa.matching_patterns(path.to_str().unwrap());
     if cli.all_matching_rules {
-        for match_id in &matches {
-            let rule_id = rule_ids[match_id];
-            let rule = &rules[rule_id];
+        let matches = ruleset.matching_rules(&Path::new(path.to_str().unwrap()));
+        for (i, rule) in &matches {
             eprintln!(
                 "{} matched rule #{}: {}  {}",
                 path.display(),
-                rule_id + 1,
+                i + 1,
                 rule.pattern,
                 rule.owners.join(" ")
             );
         }
     }
 
-    let owners = match matches.iter().max() {
-        Some(id) => {
-            let owners = &rules[*rule_ids.get(id).unwrap()].owners;
-            if owners.is_empty() {
-                None
-            } else {
-                Some(owners)
-            }
-        }
-        None => None,
-    };
+    let owners = ruleset.owners(path);
     match owners {
         Some(owners) => {
             println!("{:<70}  {}", path.display(), owners.join(" "))

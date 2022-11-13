@@ -1,0 +1,16 @@
+[package]
+name = "codeowners-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memchr = "2.5.0"
+regex = "1.6.0"
+regex-syntax = "0.6.27"
+
+[dev-dependencies]
+criterion = { version = "0.4.0", features = ["html_reports"] }
+
+[[bench]]
+name = "patternset_benchmark"
+harness = false
