@@ -4,23 +4,16 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use super::{nfa::Nfa, nfa::StateId};
+use super::{nfa::Nfa, nfa::StateId, PatternSetMatcher};
 
 #[derive(Clone)]
-pub struct PatternSetMatcher {
+pub struct NfaMatcher {
     nfa: Nfa,
     transition_cache: Arc<RwLock<HashMap<String, Vec<StateId>>>>,
 }
 
-impl PatternSetMatcher {
-    pub(crate) fn new(nfa: Nfa) -> PatternSetMatcher {
-        Self {
-            nfa,
-            transition_cache: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    pub fn matching_patterns(&self, path: impl AsRef<Path>) -> Vec<usize> {
+impl PatternSetMatcher for NfaMatcher {
+    fn matching_patterns(&self, path: impl AsRef<Path>) -> Vec<usize> {
         let components = path.as_ref().iter().map(|c| c.to_str().unwrap());
         let final_states =
             self.next_states(&components.collect::<Vec<_>>(), self.nfa.initial_states());
@@ -38,6 +31,15 @@ impl PatternSetMatcher {
             }
         }
         matches
+    }
+}
+
+impl NfaMatcher {
+    pub(crate) fn new(nfa: Nfa) -> NfaMatcher {
+        Self {
+            nfa,
+            transition_cache: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
     fn next_states(&self, path_segments: &[&str], start_states: Vec<StateId>) -> Vec<StateId> {
@@ -214,12 +216,7 @@ mod tests {
         assert_matches(&matcher, "foo/bar/baz", &patterns, &[0, 1]);
     }
 
-    fn assert_matches(
-        matcher: &PatternSetMatcher,
-        path: &str,
-        patterns: &[&str],
-        expected: &[usize],
-    ) {
+    fn assert_matches(matcher: &NfaMatcher, path: &str, patterns: &[&str], expected: &[usize]) {
         assert_eq!(
             HashSet::<usize>::from_iter(matcher.matching_patterns(path).into_iter()),
             HashSet::from_iter(expected.iter().copied()),
@@ -229,11 +226,11 @@ mod tests {
         );
     }
 
-    fn matcher_for_patterns(patterns: &[&str]) -> PatternSetMatcher {
+    fn matcher_for_patterns(patterns: &[&str]) -> NfaMatcher {
         let mut nfa = Nfa::new();
         for pattern in patterns {
             nfa.add(pattern);
         }
-        PatternSetMatcher::new(nfa)
+        NfaMatcher::new(nfa)
     }
 }

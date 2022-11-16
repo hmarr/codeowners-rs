@@ -1,29 +1,47 @@
+mod globset;
 mod matcher;
 mod nfa;
 
-pub use self::matcher::PatternSetMatcher;
+use std::path::Path;
 
-pub struct PatternSetBuilder {
+pub use self::globset::{GlobsetBuilder, GlobsetMatcher};
+pub use self::matcher::NfaMatcher;
+
+pub trait PatternSetMatcher: Clone {
+    fn matching_patterns(&self, path: impl AsRef<Path>) -> Vec<usize>;
+}
+
+pub trait PatternSetBuilder {
+    type Matcher: PatternSetMatcher;
+
+    fn new() -> Self;
+    fn add(&mut self, pattern: &str);
+    fn build(self) -> Self::Matcher;
+}
+
+pub struct NfaBuilder {
     nfa: nfa::Nfa,
 }
 
-impl PatternSetBuilder {
-    pub fn new() -> Self {
+impl PatternSetBuilder for NfaBuilder {
+    type Matcher = NfaMatcher;
+
+    fn new() -> Self {
         Self {
             nfa: nfa::Nfa::new(),
         }
     }
 
-    pub fn add(&mut self, pattern: &str) {
+    fn add(&mut self, pattern: &str) {
         self.nfa.add(pattern);
     }
 
-    pub fn build(self) -> PatternSetMatcher {
-        PatternSetMatcher::new(self.nfa)
+    fn build(self) -> NfaMatcher {
+        NfaMatcher::new(self.nfa)
     }
 }
 
-impl Default for PatternSetBuilder {
+impl Default for NfaBuilder {
     fn default() -> Self {
         Self::new()
     }

@@ -45,7 +45,11 @@ fn main() -> Result<()> {
     let codeowners_path = cli.codeowners_path();
     let rules = parser::parse_rules(File::open(codeowners_path)?);
 
-    let mut builder = RuleSetBuilder::new();
+    #[cfg(feature = "pm-globset")]
+    let mut builder: RuleSetBuilder<codeowners_rs::GlobsetBuilder> = RuleSetBuilder::new();
+    #[cfg(not(feature = "pm-globset"))]
+    let mut builder: RuleSetBuilder<codeowners_rs::NfaBuilder> = RuleSetBuilder::new();
+
     for rule in rules {
         builder.add(rule);
     }
@@ -78,7 +82,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
+fn print_owners<M: codeowners_rs::PatternSetMatcher>(
+    cli: &Cli,
+    path: impl AsRef<Path>,
+    ruleset: &RuleSet<M>,
+) {
     let path = path
         .as_ref()
         .strip_prefix(".")

@@ -13,3 +13,4 @@ walkdir = "2.0"
 
 [features]
 default = ["rayon"]
+pm-globset = []

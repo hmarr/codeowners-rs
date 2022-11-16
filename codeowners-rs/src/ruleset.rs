@@ -2,16 +2,16 @@ use std::path::Path;
 
 use crate::{
     parser::Rule,
-    patternset::{PatternSetBuilder, PatternSetMatcher},
+    patternset::{NfaBuilder, NfaMatcher, PatternSetBuilder, PatternSetMatcher},
 };
 
 #[derive(Clone)]
-pub struct RuleSet {
+pub struct RuleSet<M: PatternSetMatcher = NfaMatcher> {
     rules: Vec<Rule>,
-    pattern_set: PatternSetMatcher,
+    pattern_set: M,
 }
 
-impl RuleSet {
+impl<M: PatternSetMatcher> RuleSet<M> {
     pub fn matching_rules(&self, path: impl AsRef<Path>) -> Vec<(usize, &Rule)> {
         self.pattern_set
             .matching_patterns(path)
@@ -35,16 +35,16 @@ impl RuleSet {
     }
 }
 
-pub struct RuleSetBuilder {
+pub struct RuleSetBuilder<B: PatternSetBuilder = NfaBuilder> {
     rules: Vec<Rule>,
-    pattern_set_builder: PatternSetBuilder,
+    pattern_set_builder: B,
 }
 
-impl RuleSetBuilder {
+impl<B: PatternSetBuilder> RuleSetBuilder<B> {
     pub fn new() -> Self {
         Self {
             rules: Vec::new(),
-            pattern_set_builder: PatternSetBuilder::new(),
+            pattern_set_builder: B::new(),
         }
     }
 
@@ -53,7 +53,7 @@ impl RuleSetBuilder {
         self.rules.push(rule);
     }
 
-    pub fn build(self) -> RuleSet {
+    pub fn build(self) -> RuleSet<B::Matcher> {
         RuleSet {
             rules: self.rules,
             pattern_set: self.pattern_set_builder.build(),
@@ -61,7 +61,7 @@ impl RuleSetBuilder {
     }
 }
 
-impl Default for RuleSetBuilder {
+impl<B: PatternSetBuilder> Default for RuleSetBuilder<B> {
     fn default() -> Self {
         Self::new()
     }
