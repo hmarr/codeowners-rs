@@ -6,6 +6,8 @@ use std::{
 
 use super::{nfa::Nfa, nfa::StateId};
 
+/// Matches a path against a set of patterns. Includes a thread-safe transition
+/// cache to speed up subsequent lookups. Created using a [`super::Builder`].
 #[derive(Clone)]
 pub struct Matcher {
     nfa: Nfa,
@@ -20,10 +22,13 @@ impl Matcher {
         }
     }
 
+    /// Match a path against the patterns in the set. Returns a list of pattern
+    /// indices that match the path. The pattern indices match the order in which
+    /// the patterns were added to the builder.
     pub fn matching_patterns(&self, path: impl AsRef<Path>) -> Vec<usize> {
         let components = path.as_ref().iter().map(|c| c.to_str().unwrap());
-        let final_states =
-            self.next_states(&components.collect::<Vec<_>>(), self.nfa.initial_states());
+        let initial_states = self.nfa.initial_states();
+        let final_states = self.next_states(&components.collect::<Vec<_>>(), initial_states);
 
         let mut matches = Vec::new();
         for state_id in final_states {
@@ -101,6 +106,8 @@ impl Matcher {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    use crate::patternset::Builder;
 
     use super::*;
 
@@ -225,10 +232,10 @@ mod tests {
     }
 
     fn matcher_for_patterns(patterns: &[&str]) -> Matcher {
-        let mut nfa = Nfa::new();
+        let mut builder = Builder::new();
         for pattern in patterns {
-            nfa.add(pattern);
+            builder.add(pattern);
         }
-        Matcher::new(nfa)
+        builder.build()
     }
 }

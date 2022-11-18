@@ -24,7 +24,6 @@
 //! "));
 //! let ruleset = RuleSet::new(rules);
 //!
-//! println!("hello!");
 //! for path in &["src/main.rs", "docs/README.md", "README.md"] {
 //!    let owners = ruleset.owners(path);
 //!    println!("{}: {:?}", path, owners);

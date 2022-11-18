@@ -1,110 +1,56 @@
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct StateId(pub u32);
+
+impl From<StateId> for usize {
+    fn from(id: StateId) -> usize {
+        id.0 as usize
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct State {
+    pub(crate) terminal_for_patterns: Vec<usize>,
+    pub(crate) transitions: Vec<Transition>,
+    pub(crate) epsilon_transition: Option<StateId>,
+}
+
+impl State {
+    pub(crate) fn new() -> Self {
+        Self {
+            terminal_for_patterns: Vec::new(),
+            transitions: Vec::new(),
+            epsilon_transition: None,
+        }
+    }
+
+    pub(crate) fn is_terminal(&self) -> bool {
+        !self.terminal_for_patterns.is_empty()
+    }
+
+    pub(crate) fn add_transition(&mut self, transition: Transition) {
+        self.transitions.push(transition);
+    }
+
+    pub(crate) fn set_terminal_for_pattern(&mut self, pattern_id: usize) {
+        self.terminal_for_patterns.push(pattern_id);
+    }
+}
+
 #[derive(Clone)]
-pub struct Nfa {
+pub(crate) struct Nfa {
     states: Vec<State>,
-    next_pattern_id: usize,
 }
 
 impl Nfa {
-    const START_STATE: StateId = StateId(0);
+    pub(crate) const START_STATE: StateId = StateId(0);
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             states: vec![State::new()],
-            next_pattern_id: 0,
         }
     }
 
-    pub fn add(&mut self, pattern: &str) -> usize {
-        let pattern_id = self.next_pattern_id;
-        self.next_pattern_id += 1;
-
-        let mut start_state_id = Self::START_STATE;
-
-        let pattern = match pattern.strip_prefix('/') {
-            Some(pattern) => pattern,
-            None => {
-                start_state_id = self.add_epsilon_transition(Self::START_STATE);
-                pattern
-            }
-        };
-
-        // We currently only match files (as opposed to directories), so the trailing slash
-        // has no effect except adding an extra empty path component at the end
-        let (pattern, trailing_slash) = match pattern.strip_suffix('/') {
-            Some(pattern) => (pattern, true),
-            None => (pattern, false),
-        };
-
-        let segments = pattern.split('/').collect::<Vec<_>>();
-        let mut end_state_id = segments
-            .iter()
-            .fold(start_state_id, |prev_state_id, segment| match *segment {
-                "**" => self.add_epsilon_transition(prev_state_id),
-                _ => self.add_transition(prev_state_id, segment),
-            });
-
-        // If the pattern ends with a trailing slash, we match everything under the
-        // directory, but not the directory itself, so we need one more segment
-        if trailing_slash {
-            end_state_id = self.add_transition(end_state_id, "*");
-        }
-
-        // Most patterns are all prefix-matched, which effectively means they end in
-        // a /**, so we need to add a self loop to the final state. The exception is
-        // patterns that end with a single wildcard, which we handle separately, which
-        // don't match recursively. This appears to be a discrepancy between the
-        // CODEOWNERS globbing rules and the .gitignore rules.
-        if let Some(&last_segment) = segments.last() {
-            if last_segment != "*" {
-                end_state_id = self.add_epsilon_transition(end_state_id);
-            }
-        }
-
-        // Mark the final state as the terminal state for this pattern
-        self.state_mut(end_state_id)
-            .set_terminal_for_pattern(pattern_id);
-
-        pattern_id
-    }
-
-    fn add_transition(&mut self, prev_state_id: StateId, segment: &str) -> StateId {
-        let existing_transition = self
-            .transitions_from(prev_state_id)
-            .find(|t| t.path_segment == segment && t.target != prev_state_id);
-        if let Some(t) = existing_transition {
-            t.target
-        } else {
-            let state_id = self.add_state();
-            self.state_mut(prev_state_id)
-                .add_transition(Transition::new(segment.to_owned(), state_id));
-            state_id
-        }
-    }
-
-    fn add_epsilon_transition(&mut self, prev_state_id: StateId) -> StateId {
-        // Double star segments match zero or more of anything, so there's never a need to
-        // have multiple consecutive double star states. Multiple consecutive double star
-        // states mean we require multiple path segments, which violoates the gitignore spec
-        let has_existing_transition = self
-            .transitions_from(prev_state_id)
-            .any(|t| t.path_segment == "*" && t.target == prev_state_id);
-        if has_existing_transition {
-            return prev_state_id;
-        }
-
-        match self.state(prev_state_id).epsilon_transition {
-            Some(next_state_id) => next_state_id,
-            None => {
-                let state_id = self.add_state();
-                self.state_mut(state_id)
-                    .add_transition(Transition::new("*".to_owned(), state_id));
-                self.state_mut(prev_state_id).epsilon_transition = Some(state_id);
-                state_id
-            }
-        }
-    }
-
-    fn add_state(&mut self) -> StateId {
+    pub(crate) fn add_state(&mut self) -> StateId {
         let id = self.states.len();
 
         let state = State::new();
@@ -117,8 +63,13 @@ impl Nfa {
         &self.states[usize::from(id)]
     }
 
-    fn state_mut(&mut self, id: StateId) -> &mut State {
+    pub(crate) fn state_mut(&mut self, id: StateId) -> &mut State {
         &mut self.states[usize::from(id)]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn states_iter(&self) -> std::slice::Iter<'_, State> {
+        self.states.iter()
     }
 
     pub(crate) fn initial_states(&self) -> Vec<StateId> {
@@ -138,69 +89,25 @@ impl Nfa {
     }
 }
 
-impl Default for Nfa {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct StateId(u32);
-
-impl From<StateId> for usize {
-    fn from(id: StateId) -> usize {
-        id.0 as usize
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct State {
-    pub(crate) terminal_for_patterns: Vec<usize>,
-    transitions: Vec<Transition>,
-    epsilon_transition: Option<StateId>,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            terminal_for_patterns: Vec::new(),
-            transitions: Vec::new(),
-            epsilon_transition: None,
-        }
-    }
-
-    pub(crate) fn is_terminal(&self) -> bool {
-        !self.terminal_for_patterns.is_empty()
-    }
-
-    fn add_transition(&mut self, transition: Transition) {
-        self.transitions.push(transition);
-    }
-
-    fn set_terminal_for_pattern(&mut self, pattern_id: usize) {
-        self.terminal_for_patterns.push(pattern_id);
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct Transition {
     pub(crate) path_segment: String,
-    matcher: TransitionCondition,
     pub(crate) target: StateId,
+    condition: TransitionCondition,
 }
 
 impl Transition {
-    fn new(path_segment: String, target: StateId) -> Transition {
-        let matcher = TransitionCondition::new(&path_segment);
+    pub(crate) fn new(path_segment: String, target: StateId) -> Transition {
+        let condition = TransitionCondition::new(&path_segment);
         Self {
             path_segment,
-            matcher,
+            condition,
             target,
         }
     }
 
     pub(crate) fn is_match(&self, candidate: &str) -> bool {
-        self.matcher.is_match(&self.path_segment, candidate)
+        self.condition.is_match(&self.path_segment, candidate)
     }
 }
 
@@ -270,68 +177,4 @@ fn pattern_to_regex(pattern: &str) -> regex::Regex {
 
 fn has_wildcard(mut char_iter: impl Iterator<Item = char>) -> bool {
     char_iter.any(|c| c == '*' || c == '?')
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_nfa_generation() {
-        let mut mg = Nfa::new();
-
-        mg.add("/foo/*");
-        assert_eq!(
-            transitions_for(&mg),
-            vec![(0, "foo".to_owned(), 1), (1, "*".to_owned(), 2)]
-        );
-
-        mg.add("/foo/bar");
-        assert_eq!(
-            transitions_for(&mg),
-            vec![
-                (0, "foo".to_owned(), 1),
-                (1, "*".to_owned(), 2),
-                (1, "bar".to_owned(), 3),
-                (4, "*".to_owned(), 4)
-            ]
-        );
-    }
-
-    #[allow(dead_code)]
-    fn generate_dot(nfa: &Nfa) -> String {
-        let mut dot = String::from("digraph G {\n  rankdir=\"LR\"\n");
-        for (state_id, state) in nfa.states.iter().enumerate() {
-            if state.is_terminal() {
-                dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
-            }
-            for transition in state.transitions.iter() {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"{}\"];\n",
-                    state_id, transition.target.0, transition.path_segment
-                ));
-            }
-            if let Some(next_state_id) = nfa.state(StateId(state_id as u32)).epsilon_transition {
-                dot.push_str(&format!(
-                    "  s{} -> s{} [label=\"ε\"];\n",
-                    state_id, next_state_id.0
-                ));
-            }
-        }
-        dot.push_str("}\n");
-        dot
-    }
-
-    fn transitions_for(nfa: &Nfa) -> Vec<(usize, String, usize)> {
-        nfa.states
-            .iter()
-            .enumerate()
-            .flat_map(|(idx, s)| {
-                s.transitions
-                    .iter()
-                    .map(|t| (idx, t.path_segment.clone(), t.target.0 as usize))
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
 }
