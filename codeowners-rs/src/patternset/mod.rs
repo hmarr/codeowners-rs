@@ -1,13 +1,13 @@
 mod matcher;
 mod nfa;
 
-pub use self::matcher::PatternSetMatcher;
+pub use self::matcher::Matcher;
 
-pub struct PatternSetBuilder {
+pub struct Builder {
     nfa: nfa::Nfa,
 }
 
-impl PatternSetBuilder {
+impl Builder {
     pub fn new() -> Self {
         Self {
             nfa: nfa::Nfa::new(),
@@ -18,12 +18,12 @@ impl PatternSetBuilder {
         self.nfa.add(pattern);
     }
 
-    pub fn build(self) -> PatternSetMatcher {
-        PatternSetMatcher::new(self.nfa)
+    pub fn build(self) -> Matcher {
+        Matcher::new(self.nfa)
     }
 }
 
-impl Default for PatternSetBuilder {
+impl Default for Builder {
     fn default() -> Self {
         Self::new()
     }

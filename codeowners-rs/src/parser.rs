@@ -6,8 +6,9 @@ pub struct Rule {
     pub owners: Vec<String>,
 }
 
-// TODO: Replace with a more rubost parser. Currently this parser accepts various
-// invalid inputs and ignores any errors.
+// TODO: Replace with a more robust parser. Currently this parser accepts
+// various invalid inputs, fails to parse some valid inputs, and ignores any
+// errors.
 pub fn parse_rules(reader: impl Read) -> Vec<Rule> {
     BufReader::new(reader)
         .lines()

@@ -7,13 +7,13 @@ use std::{
 use super::{nfa::Nfa, nfa::StateId};
 
 #[derive(Clone)]
-pub struct PatternSetMatcher {
+pub struct Matcher {
     nfa: Nfa,
     transition_cache: Arc<RwLock<HashMap<String, Vec<StateId>>>>,
 }
 
-impl PatternSetMatcher {
-    pub(crate) fn new(nfa: Nfa) -> PatternSetMatcher {
+impl Matcher {
+    pub(crate) fn new(nfa: Nfa) -> Matcher {
         Self {
             nfa,
             transition_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -214,12 +214,7 @@ mod tests {
         assert_matches(&matcher, "foo/bar/baz", &patterns, &[0, 1]);
     }
 
-    fn assert_matches(
-        matcher: &PatternSetMatcher,
-        path: &str,
-        patterns: &[&str],
-        expected: &[usize],
-    ) {
+    fn assert_matches(matcher: &Matcher, path: &str, patterns: &[&str], expected: &[usize]) {
         assert_eq!(
             HashSet::<usize>::from_iter(matcher.matching_patterns(path).into_iter()),
             HashSet::from_iter(expected.iter().copied()),
@@ -229,11 +224,11 @@ mod tests {
         );
     }
 
-    fn matcher_for_patterns(patterns: &[&str]) -> PatternSetMatcher {
+    fn matcher_for_patterns(patterns: &[&str]) -> Matcher {
         let mut nfa = Nfa::new();
         for pattern in patterns {
             nfa.add(pattern);
         }
-        PatternSetMatcher::new(nfa)
+        Matcher::new(nfa)
     }
 }

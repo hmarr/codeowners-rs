@@ -1,4 +1,4 @@
-use codeowners_rs::{parser::Rule, RuleSet, RuleSetBuilder};
+use codeowners_rs::{Rule, RuleSet};
 use criterion::{criterion_group, criterion_main, Criterion};
 
 const TEST_PATHS: &[&str] = &[
@@ -22,14 +22,15 @@ const TEST_PATTERNS: &[&str] = &[
 ];
 
 fn build_patternset(patterns: &[&str]) -> RuleSet {
-    let mut builder = RuleSetBuilder::new();
-    for pattern in patterns {
-        builder.add(Rule {
+    let rules = patterns
+        .iter()
+        .map(|&pattern| Rule {
             pattern: pattern.to_string(),
             owners: vec![],
-        });
-    }
-    builder.build()
+        })
+        .collect();
+
+    RuleSet::new(rules)
 }
 
 fn patternset_benchmark(c: &mut Criterion) {

@@ -8,8 +8,7 @@ use clap::Parser;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
-use codeowners_rs::RuleSetBuilder;
-use codeowners_rs::{parser, RuleSet};
+use codeowners_rs::RuleSet;
 
 #[derive(Parser)]
 #[command(version)]
@@ -43,13 +42,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let codeowners_path = cli.codeowners_path();
-    let rules = parser::parse_rules(File::open(codeowners_path)?);
-
-    let mut builder = RuleSetBuilder::new();
-    for rule in rules {
-        builder.add(rule);
-    }
-    let ruleset = builder.build();
+    let ruleset = RuleSet::from_reader(File::open(codeowners_path)?);
 
     for root_path in cli.root_paths() {
         if !root_path.exists() {
