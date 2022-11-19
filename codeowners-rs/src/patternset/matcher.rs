@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     path::Path,
     sync::{Arc, RwLock},
@@ -26,9 +27,13 @@ impl Matcher {
     /// indices that match the path. The pattern indices match the order in which
     /// the patterns were added to the builder.
     pub fn matching_patterns(&self, path: impl AsRef<Path>) -> Vec<usize> {
-        let components = path.as_ref().iter().map(|c| c.to_str().unwrap());
+        let components = path
+            .as_ref()
+            .iter()
+            .map(|c| c.to_string_lossy())
+            .collect::<Vec<_>>();
         let initial_states = self.nfa.initial_states();
-        let final_states = self.next_states(&components.collect::<Vec<_>>(), initial_states);
+        let final_states = self.next_states(&components, initial_states);
 
         let mut matches = Vec::new();
         for state_id in final_states {
@@ -51,7 +56,7 @@ impl Matcher {
     // states we're in after stepping through the NFA. This is the core of the
     // matching logic. `next_states` calls itself recursively until the path
     // segment slice is empty.
-    fn next_states(&self, path_segments: &[&str], start_states: Vec<StateId>) -> Vec<StateId> {
+    fn next_states(&self, path_segments: &[Cow<str>], start_states: Vec<StateId>) -> Vec<StateId> {
         // Base case - no more path segments to match
         if path_segments.is_empty() {
             return start_states;
@@ -74,8 +79,9 @@ impl Matcher {
 
         // Now that we have the states for the current path's prefix, compute the
         // next states for the current path by following the matching transitions for
-        // the current set of states we're in
-        let segment = *path_segments.last().unwrap();
+        // the current set of states we're in. The `unwrap` won't panic because we
+        // checked that the slice isn't empty above.
+        let segment = path_segments.last().unwrap();
         let mut next_states = Vec::new();
         for state_id in states {
             self.nfa
