@@ -33,22 +33,30 @@ impl Builder {
 
         let mut start_state_id = Nfa::START_STATE;
 
-        let pattern = match pattern.strip_prefix('/') {
-            Some(pattern) => pattern,
-            None => {
-                start_state_id = self.add_epsilon_transition(Nfa::START_STATE);
-                pattern
-            }
+        // Remove the leading slash if present. It forces left-anchoring so we
+        // need to remember whether it was present or not.
+        let (pattern, leading_slash) = match pattern.strip_prefix('/') {
+            Some(pattern) => (pattern, true),
+            None => (pattern, false),
         };
 
         // We currently only match files (as opposed to directories), so the trailing slash
-        // has no effect except adding an extra empty path component at the end
+        // has no effect except adding an extra empty path component at the end.
         let (pattern, trailing_slash) = match pattern.strip_suffix('/') {
             Some(pattern) => (pattern, true),
             None => (pattern, false),
         };
 
+        // CODEOWNERS files use Unix path separators.
         let segments = pattern.split('/').collect::<Vec<_>>();
+
+        // All patterns are left-anchored unless they're a single component with
+        // no leading slash (but a trailing slash is permitted).
+        if !leading_slash && segments.len() == 1 {
+            start_state_id = self.add_epsilon_transition(Nfa::START_STATE);
+        }
+
+        // Add states and transitions for each of the pattern components.
         let mut end_state_id =
             segments
                 .iter()
@@ -57,9 +65,10 @@ impl Builder {
                     _ => self.add_transition(from_id, segment),
                 });
 
-        // If the pattern ends with a trailing slash, we match everything under the
-        // directory, but not the directory itself, so we need one more segment
-        if trailing_slash {
+        // If the pattern ends with a trailing slash or /**, we match everything
+        // under the directory, but not the directory itself, so we need one
+        // more segment
+        if trailing_slash || segments.last() == Some(&"**") {
             end_state_id = self.add_transition(end_state_id, "*");
         }
 
@@ -77,7 +86,7 @@ impl Builder {
         // Mark the final state as the terminal state for this pattern
         self.nfa
             .state_mut(end_state_id)
-            .set_terminal_for_pattern(pattern_id);
+            .mark_as_terminal(pattern_id);
 
         pattern_id
     }
@@ -161,6 +170,14 @@ mod tests {
                 (4, "*".to_owned(), 4)
             ]
         );
+    }
+
+    #[test]
+    fn test_thing() {
+        let pat = "/modules/thanos-*/**";
+        let mut builder = Builder::new();
+        builder.add(pat);
+        println!("{}", generate_dot(&builder.nfa));
     }
 
     #[allow(dead_code)]

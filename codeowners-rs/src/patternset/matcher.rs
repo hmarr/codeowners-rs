@@ -32,6 +32,8 @@ impl Matcher {
 
         let mut matches = Vec::new();
         for state_id in final_states {
+            // After processing the path, find the states we're in that are
+            // terminal, and return the pattern ids for those states.
             if self.nfa.state(state_id).is_terminal() {
                 matches.extend(
                     self.nfa
@@ -45,6 +47,10 @@ impl Matcher {
         matches
     }
 
+    // Given a set of states and a slice of path components, return the set of
+    // states we're in after stepping through the NFA. This is the core of the
+    // matching logic. `next_states` calls itself recursively until the path
+    // segment slice is empty.
     fn next_states(&self, path_segments: &[&str], start_states: Vec<StateId>) -> Vec<StateId> {
         // Base case - no more path segments to match
         if path_segments.is_empty() {
@@ -135,16 +141,18 @@ mod tests {
         let matcher = matcher_for_patterns(&patterns);
 
         assert_matches(&matcher, "src/parser/mod.rs", &patterns, &[0, 1, 2]);
-        assert_matches(&matcher, "foo/src/parser/mod.rs", &patterns, &[0, 1, 2]);
+        assert_matches(&matcher, "src/parser", &patterns, &[0, 1]);
+        assert_matches(&matcher, "foo/src/parser/mod.rs", &patterns, &[0]);
     }
 
     #[test]
     fn test_anchoring() {
-        let patterns = ["/script/foo", "script/foo"];
+        let patterns = ["/script/foo", "script/foo", "/foo", "foo"];
         let matcher = matcher_for_patterns(&patterns);
 
-        assert_matches(&matcher, "script/foo", &patterns, &[0, 1]);
-        assert_matches(&matcher, "bar/script/foo", &patterns, &[1]);
+        assert_matches(&matcher, "script/foo", &patterns, &[0, 1, 3]);
+        assert_matches(&matcher, "foo", &patterns, &[2, 3]);
+        assert_matches(&matcher, "bar/script/foo", &patterns, &[3]);
     }
 
     #[test]
@@ -216,9 +224,29 @@ mod tests {
         let patterns = ["foo/**", "**"];
         let matcher = matcher_for_patterns(&patterns);
 
+        assert_matches(&matcher, "foo", &patterns, &[1]);
         assert_matches(&matcher, "bar", &patterns, &[1]);
+        assert_matches(&matcher, "foo/bar", &patterns, &[0, 1]);
         assert_matches(&matcher, "x/y/baz", &patterns, &[1]);
         assert_matches(&matcher, "foo/bar/baz", &patterns, &[0, 1]);
+    }
+
+    #[test]
+    fn test_escape_sequences() {
+        let patterns = ["f\\*o", "a*b\\??", "\\*qux", "bar\\*", "\\*"];
+        let matcher = matcher_for_patterns(&patterns);
+
+        assert_matches(&matcher, "f*o", &patterns, &[0]);
+        assert_matches(&matcher, "foo", &patterns, &[]);
+        assert_matches(&matcher, "axb?!", &patterns, &[1]);
+        assert_matches(&matcher, "axb?", &patterns, &[]);
+        assert_matches(&matcher, "axbc!", &patterns, &[]);
+        assert_matches(&matcher, "*qux", &patterns, &[2]);
+        assert_matches(&matcher, "xqux", &patterns, &[]);
+        assert_matches(&matcher, "bar*", &patterns, &[3]);
+        assert_matches(&matcher, "bar", &patterns, &[]);
+        assert_matches(&matcher, "*", &patterns, &[4]);
+        assert_matches(&matcher, "a", &patterns, &[]);
     }
 
     fn assert_matches(matcher: &Matcher, path: &str, patterns: &[&str], expected: &[usize]) {
