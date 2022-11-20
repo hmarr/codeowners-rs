@@ -1,6 +1,6 @@
 use super::{
     nfa::{Nfa, StateId, Transition},
-    Matcher,
+    Matcher, TreeMatcher,
 };
 
 /// Builder for a patternset [`Matcher`]. Calling [`Builder::build`] will
@@ -24,6 +24,11 @@ impl Builder {
     /// consume the builder.    
     pub fn build(self) -> Matcher {
         Matcher::new(self.nfa)
+    }
+
+    // TODO: use a Matcher trait and `build` generic over the matcher type.
+    pub fn build_tree_matcher(self) -> TreeMatcher {
+        TreeMatcher::new(self.nfa)
     }
 
     /// Add a pattern to the builder.

@@ -31,6 +31,7 @@
 //! ```
 
 mod parser;
+mod path_tree;
 pub mod patternset;
 mod ruleset;
 
