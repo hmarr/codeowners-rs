@@ -12,7 +12,7 @@ impl From<StateId> for usize {
 #[derive(Debug, Clone)]
 pub(crate) struct State {
     // Denotes this state as a terminal state for all patterns in the vector.
-    pub(crate) terminal_for_patterns: Vec<usize>,
+    pub(crate) terminal_for_patterns: Option<Vec<usize>>,
     // Transitions from this state to other states.
     pub(crate) transitions: Vec<Transition>,
     // Epislon transitions are unconditionally traversed when _entering_ this
@@ -26,14 +26,10 @@ pub(crate) struct State {
 impl State {
     pub(crate) fn new() -> Self {
         Self {
-            terminal_for_patterns: Vec::new(),
+            terminal_for_patterns: None,
             transitions: Vec::new(),
             epsilon_transition: None,
         }
-    }
-
-    pub(crate) fn is_terminal(&self) -> bool {
-        !self.terminal_for_patterns.is_empty()
     }
 
     pub(crate) fn add_transition(&mut self, transition: Transition) {
@@ -41,7 +37,11 @@ impl State {
     }
 
     pub(crate) fn mark_as_terminal(&mut self, pattern_id: usize) {
-        self.terminal_for_patterns.push(pattern_id);
+        if let Some(patterns) = &mut self.terminal_for_patterns {
+            patterns.push(pattern_id);
+        } else {
+            self.terminal_for_patterns = Some(vec![pattern_id]);
+        }
     }
 }
 

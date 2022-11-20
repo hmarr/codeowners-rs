@@ -184,7 +184,7 @@ mod tests {
     fn generate_dot(nfa: &Nfa) -> String {
         let mut dot = String::from("digraph G {\n  rankdir=\"LR\"\n");
         for (state_id, state) in nfa.states_iter().enumerate() {
-            if state.is_terminal() {
+            if state.terminal_for_patterns.is_some() {
                 dot.push_str(&format!("  s{} [shape=doublecircle];\n", state_id));
             }
             for transition in state.transitions.iter() {

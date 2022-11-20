@@ -39,14 +39,8 @@ impl Matcher {
         for state_id in final_states {
             // After processing the path, find the states we're in that are
             // terminal, and return the pattern ids for those states.
-            if self.nfa.state(state_id).is_terminal() {
-                matches.extend(
-                    self.nfa
-                        .state(state_id)
-                        .terminal_for_patterns
-                        .iter()
-                        .copied(),
-                );
+            if let Some(pattern_ids) = &self.nfa.state(state_id).terminal_for_patterns {
+                matches.extend(pattern_ids.iter().copied());
             }
         }
         matches
