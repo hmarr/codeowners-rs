@@ -128,7 +128,7 @@ impl Transition {
     }
 
     pub(crate) fn is_match(&self, candidate: &str) -> bool {
-        self.condition.is_match(candidate)
+        self.condition.is_match(&self.path_segment, candidate)
     }
 }
 
@@ -140,13 +140,13 @@ enum TransitionCondition {
     // A pattern segment that's a single asterisk matches anything.
     Unconditional,
     // Any literal string that requires an exact match.
-    Literal(String),
+    Literal,
     // Any literal pattern ends with an asterisk is a prefix match.
-    Prefix(String),
+    Prefix,
     // Any literal pattern starts with an asterisk is a prefix match.
-    Suffix(String),
+    Suffix,
     // Any literal pattern starts and ends with an asterisk is a substring match.
-    Contains(String),
+    Contains,
     // Anything more complex becomes a regex.
     Regex(regex::Regex),
 }
@@ -157,26 +157,33 @@ impl TransitionCondition {
             return Self::Unconditional;
         }
 
-        let (leading_star, trailing_star, internal_wildcards) = wildcard_locations(glob);
+        // We need to remove backslashes from the pattern to perform literal
+        // comparisons. Calling `replace` and storing the result causes an extra
+        // allocation for each path segment. We could use a Cow, but
+        // self-referencial structs are tricky. Instead, we assume backslashes
+        // appear infrequently and fall back to a regex match.
+        if glob.contains('\\') {
+            return Self::Regex(pattern_to_regex(glob));
+        }
 
-        // For non-regex condition types we remove the escape characters so we
-        // don't need to worry about them at match time.
+        // Use fast-path literal matches if possible, otherwise fall back to regexes.
+        let (leading_star, trailing_star, internal_wildcards) = wildcard_locations(glob);
         match (leading_star, trailing_star, internal_wildcards) {
-            (false, false, false) => Self::Literal(glob.replace('\\', "")),
-            (false, true, false) => Self::Prefix(glob.replace('\\', "")),
-            (true, false, false) => Self::Suffix(glob.replace('\\', "")),
-            (true, true, false) => Self::Contains(glob.replace('\\', "")),
+            (false, false, false) => Self::Literal,
+            (false, true, false) => Self::Prefix,
+            (true, false, false) => Self::Suffix,
+            (true, true, false) => Self::Contains,
             _ => Self::Regex(pattern_to_regex(glob)),
         }
     }
 
-    fn is_match(&self, candidate: &str) -> bool {
+    fn is_match(&self, pattern: &str, candidate: &str) -> bool {
         match self {
             Self::Unconditional => true,
-            Self::Literal(pattern) => pattern == candidate,
-            Self::Prefix(pattern) => candidate.starts_with(pattern.trim_end_matches('*')),
-            Self::Suffix(pattern) => candidate.ends_with(pattern.trim_start_matches('*')),
-            Self::Contains(pattern) => {
+            Self::Literal => pattern == candidate,
+            Self::Prefix => candidate.starts_with(pattern.trim_end_matches('*')),
+            Self::Suffix => candidate.ends_with(pattern.trim_start_matches('*')),
+            Self::Contains => {
                 memchr::memmem::find(candidate.as_bytes(), pattern.trim_matches('*').as_bytes())
                     .is_some()
             }
@@ -187,7 +194,7 @@ impl TransitionCondition {
 
 // Convert a glob-style pattern to a regular expression.
 fn pattern_to_regex(pattern: &str) -> regex::Regex {
-    let mut regex = String::with_capacity(pattern.len() + 8);
+    let mut regex = String::new();
     regex.push_str(r#"\A"#);
 
     let mut escape = false;
