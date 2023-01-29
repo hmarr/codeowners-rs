@@ -1,9 +1,10 @@
 use std::{
     fs::File,
+    io::BufRead,
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::Parser;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -17,6 +18,9 @@ struct Cli {
 
     #[clap(short = 'f', long = "file")]
     codeowners_file: Option<PathBuf>,
+
+    #[clap(short = 'p', long = "paths-from")]
+    paths_from_file: Option<PathBuf>,
 
     #[arg(long)]
     all_matching_rules: bool,
@@ -36,6 +40,22 @@ impl Cli {
             self.paths.clone()
         }
     }
+
+    fn paths_iter(&self) -> Result<Box<dyn Iterator<Item = PathBuf> + Send>> {
+        if let Some(paths_from_file) = &self.paths_from_file {
+            let file = File::open(paths_from_file)
+                .map_err(|e| anyhow!("reading {:?}: {}", paths_from_file, e))?;
+            let reader = std::io::BufReader::new(file);
+            Ok(Box::new(
+                reader.lines().filter_map(|l| l.ok()).map(PathBuf::from),
+            ))
+        } else {
+            Ok(self.root_paths().into_iter().map(walk_files).fold(
+                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = _> + Send>,
+                |a, b| Box::new(a.chain(b)),
+            ))
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -49,24 +69,18 @@ fn main() -> Result<()> {
             eprintln!("error: path does not exist: {}", root_path.display());
             continue;
         }
-
-        let tl = thread_local::ThreadLocal::new();
-        if root_path.is_dir() {
-            let file_iter = walk_files(root_path);
-            #[cfg(feature = "rayon")]
-            let file_iter = file_iter.par_bridge();
-            file_iter.for_each(|entry| {
-                let thread_local_ruleset = tl.get_or(|| ruleset.clone());
-                let path = entry
-                    .path()
-                    .strip_prefix(".")
-                    .unwrap_or_else(|_| entry.path());
-                print_owners(&cli, path, thread_local_ruleset);
-            });
-        } else {
-            print_owners(&cli, &root_path, &ruleset);
-        }
     }
+
+    let paths = cli.paths_iter()?;
+    #[cfg(feature = "rayon")]
+    let paths = paths.par_bridge();
+
+    let tl = thread_local::ThreadLocal::new();
+    paths.for_each(|path| {
+        let thread_local_ruleset = tl.get_or(|| ruleset.clone());
+        let path = path.strip_prefix(".").unwrap_or(&path);
+        print_owners(&cli, path, thread_local_ruleset);
+    });
 
     Ok(())
 }
@@ -98,11 +112,12 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
     }
 }
 
-fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = walkdir::DirEntry> {
+fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = PathBuf> {
     walkdir::WalkDir::new(root)
         .min_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|entry| !entry.file_type().is_dir())
         .filter(|entry| !entry.path().starts_with("./.git"))
+        .map(|entry| entry.into_path())
 }
