@@ -28,6 +28,9 @@ struct Cli {
     #[clap(short = 'u', long = "unowned")]
     unowned: bool,
 
+    #[clap(short = 't', long = "threads", default_value_t = 0)]
+    threads: usize,
+
     #[arg(long)]
     all_matching_rules: bool,
 }
@@ -88,6 +91,11 @@ impl Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    #[cfg(feature = "rayon")]
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cli.threads)
+        .build_global()?;
 
     let codeowners_path = cli.codeowners_path();
     let ruleset = RuleSet::from_reader(File::open(codeowners_path)?);
