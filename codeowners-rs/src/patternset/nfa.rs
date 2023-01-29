@@ -181,12 +181,13 @@ impl TransitionCondition {
         match self {
             Self::Unconditional => true,
             Self::Literal => pattern == candidate,
-            Self::Prefix => candidate.starts_with(pattern.trim_end_matches('*')),
-            Self::Suffix => candidate.ends_with(pattern.trim_start_matches('*')),
-            Self::Contains => {
-                memchr::memmem::find(candidate.as_bytes(), pattern.trim_matches('*').as_bytes())
-                    .is_some()
-            }
+            Self::Prefix => candidate.starts_with(&pattern[0..pattern.len() - 1]),
+            Self::Suffix => candidate.ends_with(&pattern[1..]),
+            Self::Contains => memchr::memmem::find(
+                candidate.as_bytes(),
+                &pattern.as_bytes()[1..pattern.len() - 1],
+            )
+            .is_some(),
             Self::Regex(re) => re.is_match(candidate),
         }
     }
