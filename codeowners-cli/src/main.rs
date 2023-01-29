@@ -22,6 +22,12 @@ struct Cli {
     #[clap(short = 'p', long = "paths-from")]
     paths_from_file: Option<PathBuf>,
 
+    #[clap(short = 'o', long = "owners")]
+    owners: Vec<String>,
+
+    #[clap(short = 'u', long = "unowned")]
+    unowned: bool,
+
     #[arg(long)]
     all_matching_rules: bool,
 }
@@ -54,6 +60,28 @@ impl Cli {
                 Box::new(std::iter::empty()) as Box<dyn Iterator<Item = _> + Send>,
                 |a, b| Box::new(a.chain(b)),
             ))
+        }
+    }
+
+    fn matches_owners_filters(&self, file_owners: Option<&[String]>) -> bool {
+        if let Some(file_owners) = file_owners {
+            // Owned files. If Some, slice will be non-empty.
+            if self.owners.is_empty() && !self.unowned {
+                // No filters applied
+                return true;
+            }
+
+            for owner in file_owners {
+                if self.owners.contains(&owner) {
+                    return true;
+                }
+            }
+
+            // No filters matched
+            false
+        } else {
+            // Unowned files
+            self.unowned || self.owners.is_empty()
         }
     }
 }
@@ -104,11 +132,15 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
     }
 
     let owners = ruleset.owners(path);
-    match owners {
-        Some(owners) => {
-            println!("{:<70}  {}", path.display(), owners.join(" "))
+    if cli.matches_owners_filters(owners) {
+        match owners {
+            Some(owners) => {
+                println!("{:<70}  {}", path.display(), owners.join(" "))
+            }
+            None => {
+                println!("{:<70}  (unowned)", path.display())
+            }
         }
-        None => println!("{:<70}  (unowned)", path.display()),
     }
 }
 
