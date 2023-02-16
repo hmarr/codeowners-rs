@@ -150,7 +150,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "codeowners-cli"
+name = "codeowners"
 version = "0.1.0"
 dependencies = [
  "anyhow",
