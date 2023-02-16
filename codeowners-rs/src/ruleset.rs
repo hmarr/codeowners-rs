@@ -1,9 +1,6 @@
-use std::{io, path::Path};
+use std::path::Path;
 
-use crate::{
-    parser::{parse_rules, Rule},
-    patternset,
-};
+use crate::patternset;
 
 /// `RuleSet` is a collection of CODEOWNERS rules that can be matched together
 /// against a given path. It is constructed by passing a `Vec` of `Rule` structs
@@ -12,11 +9,10 @@ use crate::{
 ///
 /// # Example
 /// ```
-/// use codeowners_rs::{RuleSet, parse_rules};
+/// use codeowners_rs::{RuleSet, parse};
 ///
-/// let reader = std::io::Cursor::new("*.rs @rustacean");
-/// let ruleset = RuleSet::new(parse_rules(reader));
-/// assert_eq!(ruleset.owners("main.rs"), Some(&["@rustacean".to_string()][..]));
+/// let ruleset = parse("*.rs rustacean@example.com").into_ruleset();
+/// assert_eq!(format!("{:?}", ruleset.owners("main.rs")), "Some([Owner { value: \"rustacean@example.com\", kind: Email }])");
 /// ```
 #[derive(Clone)]
 pub struct RuleSet {
@@ -35,11 +31,6 @@ impl RuleSet {
         Self { rules, matcher }
     }
 
-    /// Construct a `RuleSet` from a `Read`er that contains a CODEOWNERS file.
-    pub fn from_reader(reader: impl io::Read) -> Self {
-        Self::new(parse_rules(reader))
-    }
-
     /// Returns the rule (along with its index) that matches the given path. If
     /// multiple rules match, the last one is returned.
     pub fn matching_rules(&self, path: impl AsRef<Path>) -> Vec<(usize, &Rule)> {
@@ -51,7 +42,7 @@ impl RuleSet {
     }
 
     /// Returns the owners for the given path.
-    pub fn owners(&self, path: impl AsRef<Path>) -> Option<&[String]> {
+    pub fn owners(&self, path: impl AsRef<Path>) -> Option<&[Owner]> {
         self.matcher
             .matching_patterns(path)
             .iter()
@@ -64,4 +55,31 @@ impl RuleSet {
                 }
             })
     }
+}
+
+// `Rule` is an individual CODEOWNERS rule. It contains a pattern and a list of
+// owners.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    pub pattern: String,
+    pub owners: Vec<Owner>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owner {
+    pub value: String,
+    pub kind: OwnerKind,
+}
+
+impl Owner {
+    pub fn new(value: String, kind: OwnerKind) -> Self {
+        Self { value, kind }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnerKind {
+    User,
+    Team,
+    Email,
 }

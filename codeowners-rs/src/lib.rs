@@ -16,13 +16,12 @@
 //!
 //! ## Example
 //! ```
-//! use codeowners_rs::{parse_rules, RuleSet};
+//! use codeowners_rs::{parse, RuleSet};
 //!
-//! let rules = parse_rules(std::io::Cursor::new("
+//! let ruleset = parse("
 //! *.rs @github/rustaceans
 //! /docs/**/*.md @github/docs-team
-//! "));
-//! let ruleset = RuleSet::new(rules);
+//! ").into_ruleset();
 //!
 //! for path in &["src/main.rs", "docs/README.md", "README.md"] {
 //!    let owners = ruleset.owners(path);
@@ -34,5 +33,5 @@ mod parser;
 pub mod patternset;
 mod ruleset;
 
-pub use parser::{parse_rules, Rule};
-pub use ruleset::RuleSet;
+pub use parser::parse;
+pub use ruleset::{Owner, Rule, RuleSet};

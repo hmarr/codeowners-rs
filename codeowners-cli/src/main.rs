@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::BufRead,
+    io::{BufRead, Read},
     path::{Path, PathBuf},
 };
 
@@ -9,7 +9,7 @@ use clap::Parser;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
-use codeowners_rs::RuleSet;
+use codeowners_rs::{parse, Owner, RuleSet};
 
 #[derive(Parser)]
 #[command(version)]
@@ -74,7 +74,7 @@ impl Cli {
         }
     }
 
-    fn matches_owners_filters(&self, file_owners: Option<&[String]>) -> bool {
+    fn matches_owners_filters(&self, file_owners: Option<&[Owner]>) -> bool {
         if let Some(file_owners) = file_owners {
             // Owned files. If Some, slice will be non-empty.
             if self.owners.is_empty() && !self.unowned {
@@ -83,7 +83,7 @@ impl Cli {
             }
 
             for owner in file_owners {
-                if self.owners.contains(&owner) {
+                if self.owners.contains(&owner.value) {
                     return true;
                 }
             }
@@ -106,7 +106,10 @@ fn main() -> Result<()> {
         .build_global()?;
 
     let codeowners_path = cli.codeowners_path();
-    let ruleset = RuleSet::from_reader(File::open(codeowners_path)?);
+    let mut file = File::open(codeowners_path)?;
+    let mut source = String::new();
+    file.read_to_string(&mut source)?;
+    let ruleset = parse(source.as_str()).into_ruleset();
 
     for root_path in cli.root_paths() {
         if !root_path.exists() {
@@ -144,7 +147,11 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
                 path.display(),
                 i + 1,
                 rule.pattern,
-                rule.owners.join(" ")
+                rule.owners
+                    .iter()
+                    .map(|o| o.value.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(" ")
             );
         }
     }
@@ -153,7 +160,15 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
     if cli.matches_owners_filters(owners) {
         match owners {
             Some(owners) => {
-                println!("{:<70}  {}", path.display(), owners.join(" "))
+                println!(
+                    "{:<70}  {}",
+                    path.display(),
+                    owners
+                        .iter()
+                        .map(|o| o.value.as_str())
+                        .collect::<Vec<&str>>()
+                        .join(" ")
+                )
             }
             None => {
                 println!("{:<70}  (unowned)", path.display())
