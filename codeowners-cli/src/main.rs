@@ -16,21 +16,29 @@ use codeowners_rs::RuleSet;
 struct Cli {
     paths: Vec<PathBuf>,
 
+    /// Path to a CODEOWNERS file. If omitted, the following locations will be tried:
+    /// ./CODEOWNERS, ./.github/CODEOWNERS
     #[clap(short = 'f', long = "file")]
     codeowners_file: Option<PathBuf>,
 
+    /// Match paths from this file rather than walking the directory tree
     #[clap(short = 'p', long = "paths-from")]
     paths_from_file: Option<PathBuf>,
 
+    /// Filter results to files owned by this owner. May be used multiple times to
+    /// match multiple owners
     #[clap(short = 'o', long = "owners")]
     owners: Vec<String>,
 
+    /// Filter results to show unowned files. May be used with -o.
     #[clap(short = 'u', long = "unowned")]
     unowned: bool,
 
+    /// Concurrency. If set to 0, a sensible value based on CPU count will be used.
     #[clap(short = 't', long = "threads", default_value_t = 0)]
     threads: usize,
 
+    #[cfg(debug_assertions)]
     #[arg(long)]
     all_matching_rules: bool,
 }
@@ -126,6 +134,8 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
         .as_ref()
         .strip_prefix(".")
         .unwrap_or_else(|_| path.as_ref());
+
+    #[cfg(debug_assertions)]
     if cli.all_matching_rules {
         let matches = ruleset.matching_rules(&Path::new(path.to_str().unwrap()));
         for (i, rule) in &matches {
