@@ -29,9 +29,9 @@
 //! }
 //! ```
 
-mod parser;
+pub mod parser;
 pub mod patternset;
 mod ruleset;
 
-pub use parser::parse;
+pub use parser::{parse, parse_file};
 pub use ruleset::{Owner, Rule, RuleSet};

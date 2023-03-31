@@ -9,7 +9,7 @@ use clap::Parser;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
 
-use codeowners_rs::{parse, Owner, RuleSet};
+use codeowners_rs::{self, Owner, RuleSet};
 
 #[derive(Parser)]
 #[command(version)]
@@ -58,6 +58,10 @@ impl Cli {
         }
     }
 
+    // Return an iterator over all files to be checked. If --paths-from is set,
+    // return an iterator over the paths in that file. Otherwise, return an
+    // iterator over all files in the root paths. If multiple root paths are
+    // given, the iterator will return files from all of them.
     fn paths_iter(&self) -> Result<Box<dyn Iterator<Item = PathBuf> + Send>> {
         if let Some(paths_from_file) = &self.paths_from_file {
             let file = File::open(paths_from_file)
@@ -106,10 +110,20 @@ fn main() -> Result<()> {
         .build_global()?;
 
     let codeowners_path = cli.codeowners_path();
-    let mut file = File::open(codeowners_path)?;
+
+    let mut file = File::open(&codeowners_path)?;
     let mut source = String::new();
     file.read_to_string(&mut source)?;
-    let ruleset = parse(source.as_str()).into_ruleset();
+
+    let parse_result = codeowners_rs::parse(&source);
+    if !parse_result.errors.is_empty() {
+        eprintln!("error parsing {}", codeowners_path.display());
+        for error in &parse_result.errors {
+            print_parse_error(&source, error);
+        }
+        std::process::exit(1);
+    }
+    let ruleset = parse_result.into_ruleset();
 
     for root_path in cli.root_paths() {
         if !root_path.exists() {
@@ -140,7 +154,7 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
 
     #[cfg(debug_assertions)]
     if cli.all_matching_rules {
-        let matches = ruleset.matching_rules(&Path::new(path.to_str().unwrap()));
+        let matches = ruleset.matching_rules(Path::new(path.to_str().unwrap()));
         for (i, rule) in &matches {
             eprintln!(
                 "{} matched rule #{}: {}  {}",
@@ -185,4 +199,27 @@ fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = PathBuf> {
         .filter(|entry| !entry.file_type().is_dir())
         .filter(|entry| !entry.path().starts_with("./.git"))
         .map(|entry| entry.into_path())
+}
+
+fn print_parse_error(source: &str, error: &codeowners_rs::parser::ParseError) {
+    let mut line = 1;
+    let mut line_start = 0;
+    let mut line_end = 0;
+    for l in source.lines() {
+        line_end += l.len() + 1;
+        if line_end > error.span.0 {
+            break;
+        }
+        line_start = line_end;
+        line += 1;
+    }
+
+    let line_prefix = format!("line {}: ", line);
+    let context = &source[line_start..line_end];
+    eprint!("{}{}", line_prefix, context);
+
+    let padding = " ".repeat(error.span.0 - line_start + line_prefix.len());
+    let underline = "^".repeat(error.span.1 - error.span.0);
+    eprintln!("{}{}", padding, underline);
+    eprintln!("{}{}", padding, error.message);
 }
