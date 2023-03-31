@@ -1,5 +1,27 @@
+use std::{fs::File, io::Read, path::Path};
+
 use crate::ruleset::{self, Owner, OwnerKind};
 
+/// Parse a CODEOWNERS file from a string, returning a `ParseResult` containing
+/// the parsed rules and any errors encountered.
+pub fn parse(source: &str) -> ParseResult {
+    Parser::new(source).parse()
+}
+
+/// Parse a CODEOWNERS file from a file path, reading the contents of the file
+/// and returning a `ParseResult` containing the parsed rules and any errors
+/// encountered.
+pub fn parse_file(path: &Path) -> std::io::Result<ParseResult> {
+    let mut file = File::open(path)?;
+    let mut source = String::new();
+    file.read_to_string(&mut source)?;
+    Ok(parse(&source))
+}
+
+/// The result of parsing a CODEOWNERS file. Contains a `Vec` of parsed rules
+/// and a `Vec` of errors encountered during parsing. If the `Vec` of errors is
+/// non-empty, the `Vec` of rules may be incomplete. If the `Vec` of errors is
+/// empty, the file was parsed successfully.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseResult {
     pub rules: Vec<Rule>,
@@ -7,11 +29,20 @@ pub struct ParseResult {
 }
 
 impl ParseResult {
+    /// Convert the `ParseResult` into a `RuleSet`. If the `ParseResult` contains
+    /// any errors, they are ignored.
     pub fn into_ruleset(self: ParseResult) -> ruleset::RuleSet {
         ruleset::RuleSet::new(self.rules.into_iter().map(|r| r.into()).collect())
     }
 }
 
+/// A parsed CODEOWNERS rule. Contains a pattern and a list of owners, along
+/// with any comments that were found before or after the rule. All fields are
+/// wrapped in `Spanned` to preserve the original source location.
+///
+/// For most uses, the `Rule` type should be converted into a `ruleset::Rule`
+/// using the `From` trait or the `into_ruleset` method on `ParseResult`. This
+/// will remove the `Spanned` wrappers and discard any comments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
     pub pattern: Spanned<String>,
@@ -40,6 +71,8 @@ impl From<Rule> for ruleset::Rule {
     }
 }
 
+/// An error encountered while parsing a CODEOWNERS file. Contains a message
+/// describing the error and a `Span` indicating the location of the error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
     pub message: String,
@@ -55,8 +88,10 @@ impl ParseError {
     }
 }
 
+/// A span of text in a CODEOWNERS file. Contains the start and end byte offsets
+/// of the span.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Span(usize, usize);
+pub struct Span(pub usize, pub usize);
 
 impl From<(usize, usize)> for Span {
     fn from((start, end): (usize, usize)) -> Self {
@@ -64,6 +99,8 @@ impl From<(usize, usize)> for Span {
     }
 }
 
+/// A wrapper around a value that preserves the original source location of the
+/// value. Contains the value and a `Span` indicating the location of the value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spanned<T>(pub T, pub Span);
 
@@ -88,7 +125,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse(&mut self) -> ParseResult {
+    fn parse(mut self) -> ParseResult {
         let mut rules = Vec::new();
         let mut leading_comments = Vec::new();
 
@@ -121,10 +158,9 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
         }
 
-        // TODO: avoid cloning errors
         ParseResult {
             rules,
-            errors: self.errors.clone(),
+            errors: self.errors,
         }
     }
 
@@ -147,7 +183,7 @@ impl<'a> Parser<'a> {
     fn parse_rule(&mut self) -> Result<Rule, ParseError> {
         let pattern = self.parse_pattern();
         if pattern.0.is_empty() {
-            return Err(ParseError::new("Expected pattern", (self.pos, self.pos)));
+            return Err(ParseError::new("expected pattern", (self.pos, self.pos)));
         }
 
         let mut owners = Vec::new();
@@ -172,7 +208,7 @@ impl<'a> Parser<'a> {
                     trailing_comment,
                 })
             }
-            _ => Err(ParseError::new("Expected newline", (self.pos, self.pos))),
+            _ => Err(ParseError::new("expected newline", (self.pos, self.pos))),
         }
     }
 
@@ -190,7 +226,7 @@ impl<'a> Parser<'a> {
                 Some(c) => {
                     if c == '\0' {
                         self.errors.push(ParseError::new(
-                            "Patterns cannot contain null bytes",
+                            "patterns cannot contain null bytes",
                             (self.pos, self.pos + 1),
                         ));
                     }
@@ -240,14 +276,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(source: &str) -> ParseResult {
-    // let mut source = String::new();
-    // TODO: handle io error
-    // reader.read_to_string(&mut source);
-    // TODO: return both rules and errors
-    Parser::new(source).parse()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,12 +286,12 @@ mod tests {
             (
                 "foo",
                 vec![Rule::new(Spanned::new("foo", (0, 3)), vec![])],
-                Vec::<ParseError>::new(),
+                vec![],
             ),
             (
                 "foo\\  ",
                 vec![Rule::new(Spanned::new("foo ", (0, 5)), vec![])],
-                Vec::<ParseError>::new(),
+                vec![],
             ),
             (
                 " foo ",
@@ -277,13 +305,13 @@ mod tests {
                     Rule::new(Spanned::new("bar", (4, 7)), vec![]),
                     Rule::new(Spanned::new("baz", (11, 14)), vec![]),
                 ],
-                Vec::<ParseError>::new(),
+                vec![],
             ),
             (
                 "f\0oo",
                 vec![Rule::new(Spanned::new("f\0oo", (0, 4)), vec![])],
                 vec![ParseError::new(
-                    "Patterns cannot contain null bytes",
+                    "patterns cannot contain null bytes",
                     (1, 2),
                 )],
             ),
