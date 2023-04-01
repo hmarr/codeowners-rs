@@ -2,6 +2,32 @@
 
 A fast Rust library and CLI for GitHub's [CODEOWNERS file](https://docs.github.com/en/github/creating-cloning-and-archiving-repositories/about-code-owners#codeowners-syntax).
 
+[![crates.io](https://img.shields.io/crates/v/codeowners-rs.svg)](https://crates.io/crates/codeowners-rs)
+[![docs.rs](https://img.shields.io/badge/docs.rs-codeowners--rs-blue?logo=docs.rs)](https://docs.rs/codeowners-rs)
+[![CI](https://github.com/hmarr/codeowners-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hmarr/codeowners-rs/actions/workflows/ci.yml)
+
+Includes a fast, hand-written parser for CODEOWNERS files. The resulting parse tree includes comments and byte offsets for all syntax components, making it suitable for writing syntax highlighters or providing syntax-aware diagnostic information.
+
+The matcher works by building an NFA from the rules, which makes this library highly performant for large rulesets and matching large numbers of paths.
+
+## Example usage
+
+```rust
+use codeowners_rs::{parse, RuleSet};
+
+let ruleset = parse("
+*.rs @github/rustaceans
+/docs/**/*.md @github/docs-team
+").into_ruleset();
+
+for path in &["src/main.rs", "docs/README.md", "README.md"] {
+   let owners = ruleset.owners(path);
+   println!("{}: {:?}", path, owners);
+}
+```
+
+See the full documentation on [docs.rs](https://docs.rs/codeowners-rs).
+
 ## CLI usage
 
 ```
