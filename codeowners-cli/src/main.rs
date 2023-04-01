@@ -117,9 +117,11 @@ fn main() -> Result<()> {
 
     let parse_result = codeowners_rs::parse(&source);
     if !parse_result.errors.is_empty() {
-        eprintln!("error parsing {}", codeowners_path.display());
-        for error in &parse_result.errors {
-            print_parse_error(&source, error);
+        for (i, error) in parse_result.errors.iter().enumerate() {
+            print_parse_error(&codeowners_path, &source, error);
+            if i < parse_result.errors.len() - 1 {
+                println!();
+            }
         }
         std::process::exit(1);
     }
@@ -201,7 +203,7 @@ fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = PathBuf> {
         .map(|entry| entry.into_path())
 }
 
-fn print_parse_error(source: &str, error: &codeowners_rs::parser::ParseError) {
+fn print_parse_error(path: &Path, source: &str, error: &codeowners_rs::parser::ParseError) {
     let mut line = 1;
     let mut line_start = 0;
     let mut line_end = 0;
@@ -214,12 +216,13 @@ fn print_parse_error(source: &str, error: &codeowners_rs::parser::ParseError) {
         line += 1;
     }
 
-    let line_prefix = format!("line {}: ", line);
+    eprintln!("{} line {}: {}", path.display(), line, error.message);
+
+    let line_prefix = format!("{:4} | ", line);
     let context = &source[line_start..line_end];
     eprint!("{}{}", line_prefix, context);
 
     let padding = " ".repeat(error.span.0 - line_start + line_prefix.len());
     let underline = "^".repeat(error.span.1 - error.span.0);
     eprintln!("{}{}", padding, underline);
-    eprintln!("{}{}", padding, error.message);
 }
