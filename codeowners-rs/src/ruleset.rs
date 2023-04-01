@@ -34,29 +34,38 @@ impl RuleSet {
         Self { rules, matcher }
     }
 
-    /// Returns the rule (along with its index) that matches the given path. If
-    /// multiple rules match, the last one is returned.
-    pub fn matching_rules(&self, path: impl AsRef<Path>) -> Vec<(usize, &Rule)> {
+    /// Returns the matching rule (if any) for the given path. If multiple rules
+    /// match the path, the last matching rule in the CODEOWNERS file will be
+    /// returned. If no rules match the path, `None` will be returned.
+    pub fn matching_rule(&self, path: impl AsRef<Path>) -> Option<&Rule> {
+        self.matcher
+            .matching_patterns(path)
+            .iter()
+            .max()
+            .map(|&idx| &self.rules[idx])
+    }
+
+    /// Returns the owners for the given path, or `None` if no rules match the
+    /// path or the matching rule has no owners.
+    pub fn owners(&self, path: impl AsRef<Path>) -> Option<&[Owner]> {
+        return self.matching_rule(path).and_then(|rule| {
+            if rule.owners.is_empty() {
+                None
+            } else {
+                Some(rule.owners.as_ref())
+            }
+        });
+    }
+
+    /// Returns the all rules that match the given path along with their indices.
+    /// If multiple rules match the path, the rule with the highest index should
+    /// be considered to be the "winning" rule.
+    pub fn all_matching_rules(&self, path: impl AsRef<Path>) -> Vec<(usize, &Rule)> {
         self.matcher
             .matching_patterns(path)
             .iter()
             .map(|&idx| (idx, &self.rules[idx]))
             .collect()
-    }
-
-    /// Returns the owners for the given path.
-    pub fn owners(&self, path: impl AsRef<Path>) -> Option<&[Owner]> {
-        self.matcher
-            .matching_patterns(path)
-            .iter()
-            .max()
-            .and_then(|&idx| {
-                if self.rules[idx].owners.is_empty() {
-                    None
-                } else {
-                    Some(self.rules[idx].owners.as_ref())
-                }
-            })
     }
 }
 
