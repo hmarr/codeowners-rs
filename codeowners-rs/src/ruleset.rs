@@ -1,5 +1,8 @@
 use std::path::Path;
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 use crate::patternset;
 
 /// `RuleSet` is a collection of CODEOWNERS rules that can be matched together
@@ -74,6 +77,41 @@ pub struct Owner {
 impl Owner {
     pub fn new(value: String, kind: OwnerKind) -> Self {
         Self { value, kind }
+    }
+}
+
+static EMAIL_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\A[A-Z0-9a-z\._'%\+\-]+@[A-Za-z0-9\.\-]+\.[A-Za-z]{2,6}\z").unwrap());
+static USERNAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\A@[a-zA-Z0-9\-_]+\z").unwrap());
+static TEAM_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\A@[a-zA-Z0-9\-]+/[a-zA-Z0-9\-_]+\z").unwrap());
+
+#[derive(Debug, Clone)]
+pub struct InvalidOwnerError {
+    value: String,
+}
+
+impl std::fmt::Display for InvalidOwnerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid owner: {}", self.value)
+    }
+}
+
+impl std::error::Error for InvalidOwnerError {}
+
+impl TryFrom<String> for Owner {
+    type Error = InvalidOwnerError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if EMAIL_REGEX.is_match(&value) {
+            Ok(Self::new(value, OwnerKind::Email))
+        } else if USERNAME_REGEX.is_match(&value) {
+            Ok(Self::new(value, OwnerKind::User))
+        } else if TEAM_REGEX.is_match(&value) {
+            Ok(Self::new(value, OwnerKind::Team))
+        } else {
+            Err(InvalidOwnerError { value })
+        }
     }
 }
 

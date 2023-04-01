@@ -1,6 +1,6 @@
 use std::{fs::File, io::Read, path::Path};
 
-use crate::ruleset::{self, Owner, OwnerKind};
+use crate::ruleset::{self, Owner};
 
 /// Parse a CODEOWNERS file from a string, returning a `ParseResult` containing
 /// the parsed rules and any errors encountered.
@@ -189,10 +189,9 @@ impl<'a> Parser<'a> {
         let mut owners = Vec::new();
         loop {
             self.skip_whitespace();
-            let owner = self.parse_owner();
-            if owner.0.value.is_empty() {
+            let Some(owner) = self.parse_owner() else {
                 break;
-            }
+            };
             owners.push(owner);
         }
 
@@ -240,23 +239,34 @@ impl<'a> Parser<'a> {
         Spanned::new(pattern, (start, self.pos))
     }
 
-    fn parse_owner(&mut self) -> Spanned<Owner> {
+    fn parse_owner(&mut self) -> Option<Spanned<Owner>> {
         let start = self.pos;
-        let mut owner = String::new();
+        let mut owner_str = String::new();
         loop {
             match self.peek() {
                 Some(' ' | '\t' | '#' | '\r' | '\n') => break,
                 Some(c) => {
-                    owner.push(c);
+                    owner_str.push(c);
                     self.next();
                 }
                 None => break,
             }
         }
 
-        // TODO: use regexes to detect owner types and add errors about invalid formats
+        if owner_str.is_empty() {
+            return None;
+        }
 
-        Spanned::new(Owner::new(owner, OwnerKind::Email), (start, self.pos))
+        match Owner::try_from(owner_str) {
+            Ok(owner) => Some(Spanned::new(owner, (start, self.pos))),
+            Err(err) => {
+                self.errors.push(ParseError {
+                    message: err.to_string(),
+                    span: (start, self.pos).into(),
+                });
+                None
+            }
+        }
     }
 
     fn skip_whitespace(&mut self) {
@@ -278,6 +288,7 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::ruleset::OwnerKind;
     use super::*;
 
     #[test]
@@ -316,6 +327,11 @@ mod tests {
                 )],
             ),
             (
+                "foo bar",
+                vec![Rule::new(Spanned::new("foo", (0, 3)), vec![])],
+                vec![ParseError::new("invalid owner: bar", (4, 7))],
+            ),
+            (
                 "foo#abc",
                 vec![Rule {
                     pattern: Spanned::new("foo", (0, 3)),
@@ -330,19 +346,19 @@ mod tests {
                 vec![Rule::new(
                     Spanned::new("foo", (0, 3)),
                     vec![Spanned::new(
-                        Owner::new("@bar".to_string(), OwnerKind::Email),
+                        Owner::new("@bar".to_string(), OwnerKind::User),
                         (4, 8),
                     )],
                 )],
                 vec![],
             ),
             (
-                "a/b @c/d e@f.g",
+                "a/b @c/d e@f.co",
                 vec![Rule::new(
                     Spanned::new("a/b", (0, 3)),
                     vec![
-                        Spanned::new(Owner::new("@c/d".to_string(), OwnerKind::Email), (4, 8)),
-                        Spanned::new(Owner::new("e@f.g".to_string(), OwnerKind::Email), (9, 14)),
+                        Spanned::new(Owner::new("@c/d".to_string(), OwnerKind::Team), (4, 8)),
+                        Spanned::new(Owner::new("e@f.co".to_string(), OwnerKind::Email), (9, 15)),
                     ],
                 )],
                 vec![],
@@ -352,7 +368,7 @@ mod tests {
                 vec![Rule {
                     pattern: Spanned::new("foo", (2, 5)),
                     owners: vec![Spanned::new(
-                        Owner::new("@bar".to_string(), OwnerKind::Email),
+                        Owner::new("@bar".to_string(), OwnerKind::User),
                         (6, 10),
                     )],
                     leading_comments: Default::default(),
