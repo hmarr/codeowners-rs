@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -44,10 +44,16 @@ struct Cli {
 }
 
 impl Cli {
-    fn codeowners_path(&self) -> PathBuf {
-        self.codeowners_file
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("./CODEOWNERS"))
+    const DEFAULT_PATHS: &'static [&'static str] = &["./CODEOWNERS", ".github/CODEOWNERS"];
+
+    fn codeowners_path(&self) -> Option<PathBuf> {
+        match &self.codeowners_file {
+            Some(path) => Some(path.clone()),
+            None => Self::DEFAULT_PATHS
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| p.exists()),
+        }
     }
 
     fn root_paths(&self) -> Vec<PathBuf> {
@@ -109,11 +115,16 @@ fn main() -> Result<()> {
         .num_threads(cli.threads)
         .build_global()?;
 
-    let codeowners_path = cli.codeowners_path();
+    let Some(codeowners_path) = cli.codeowners_path() else {
+        eprintln!("error: no CODEOWNERS file found");
+        std::process::exit(1);
+    };
 
-    let mut file = File::open(&codeowners_path)?;
+    let mut file =
+        File::open(&codeowners_path).with_context(|| format!("opening {:?}", codeowners_path))?;
     let mut source = String::new();
-    file.read_to_string(&mut source)?;
+    file.read_to_string(&mut source)
+        .with_context(|| format!("reading {:?}", codeowners_path))?;
 
     let parse_result = codeowners_rs::parse(&source);
     if !parse_result.errors.is_empty() {
@@ -156,7 +167,7 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
 
     #[cfg(debug_assertions)]
     if cli.all_matching_rules {
-        let matches = ruleset.matching_rules(Path::new(path.to_str().unwrap()));
+        let matches = ruleset.all_matching_rules(Path::new(path.to_str().unwrap()));
         for (i, rule) in &matches {
             eprintln!(
                 "{} matched rule #{}: {}  {}",
