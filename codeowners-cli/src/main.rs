@@ -206,7 +206,6 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
 
 fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = PathBuf> {
     walkdir::WalkDir::new(root)
-        .min_depth(1)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|entry| !entry.file_type().is_dir())
