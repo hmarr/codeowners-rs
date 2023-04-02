@@ -1,6 +1,6 @@
 [package]
 name = "codeowners-rs"
-version = "0.1.1"
+version.workspace = true
 edition = "2021"
 description = "A library for parsing and matching CODEOWNERS files"
 license = "Apache-2.0"

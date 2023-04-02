@@ -1,5 +1,8 @@
 [workspace]
 members = ["codeowners-rs", "codeowners-cli"]
 
+[workspace.package]
+version = "0.1.1"
+
 [profile.release]
 debug = true
