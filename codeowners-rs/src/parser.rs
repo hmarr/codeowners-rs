@@ -26,6 +26,7 @@ pub fn parse_file(path: &Path) -> std::io::Result<ParseResult> {
 pub struct ParseResult {
     pub rules: Vec<Rule>,
     pub errors: Vec<ParseError>,
+    pub trailing_comments: Vec<Spanned<String>>,
 }
 
 impl ParseResult {
@@ -161,6 +162,7 @@ impl<'a> Parser<'a> {
         ParseResult {
             rules,
             errors: self.errors,
+            trailing_comments: leading_comments,
         }
     }
 
@@ -296,15 +298,18 @@ mod tests {
                 "foo",
                 vec![Rule::new(Spanned::new("foo", (0, 3)), vec![])],
                 vec![],
+                vec![],
             ),
             (
                 "foo\\  ",
                 vec![Rule::new(Spanned::new("foo ", (0, 5)), vec![])],
                 vec![],
+                vec![],
             ),
             (
                 " foo ",
                 vec![Rule::new(Spanned::new("foo", (1, 4)), vec![])],
+                vec![],
                 vec![],
             ),
             (
@@ -315,6 +320,7 @@ mod tests {
                     Rule::new(Spanned::new("baz", (11, 14)), vec![]),
                 ],
                 vec![],
+                vec![],
             ),
             (
                 "f\0oo",
@@ -323,6 +329,7 @@ mod tests {
                     "patterns cannot contain null bytes",
                     (1, 2),
                 )],
+                vec![],
             ),
             (
                 "foo bar @baz",
@@ -334,6 +341,7 @@ mod tests {
                     )],
                 )],
                 vec![ParseError::new("invalid owner: bar", (4, 7))],
+                vec![],
             ),
             (
                 "foo#abc",
@@ -344,6 +352,13 @@ mod tests {
                     trailing_comment: Some(Spanned::new("#abc", (3, 7))),
                 }],
                 vec![],
+                vec![],
+            ),
+            (
+                "foo\n#abc",
+                vec![Rule::new(Spanned::new("foo", (0, 3)), vec![])],
+                vec![],
+                vec![Spanned::new("#abc", (4, 8))],
             ),
             (
                 "foo @bar",
@@ -355,6 +370,7 @@ mod tests {
                     )],
                 )],
                 vec![],
+                vec![],
             ),
             (
                 "a/b @c/d e@f.co",
@@ -365,6 +381,7 @@ mod tests {
                         Spanned::new(Owner::new("e@f.co".to_string(), OwnerKind::Email), (9, 15)),
                     ],
                 )],
+                vec![],
                 vec![],
             ),
             (
@@ -378,6 +395,7 @@ mod tests {
                     leading_comments: Default::default(),
                     trailing_comment: Some(Spanned::new("# baz ", (10, 16))),
                 }],
+                vec![],
                 vec![],
             ),
             (
@@ -400,13 +418,18 @@ mod tests {
                     },
                 ],
                 vec![],
+                vec![],
             ),
         ];
 
-        for (source, rules, errors) in examples {
+        for (source, rules, errors, trailing_comments) in examples {
             assert_eq!(
                 Parser::new(source).parse(),
-                ParseResult { rules, errors },
+                ParseResult {
+                    rules,
+                    errors,
+                    trailing_comments
+                },
                 "result mismatch for `{}`",
                 source
             );
