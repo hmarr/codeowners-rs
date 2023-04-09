@@ -189,10 +189,11 @@ impl<'a> Parser<'a> {
         let mut owners = Vec::new();
         loop {
             self.skip_whitespace();
-            let Some(owner) = self.parse_owner() else {
-                break;
-            };
-            owners.push(owner);
+            match self.parse_owner() {
+                Ok(Some(owner)) => owners.push(owner),
+                Ok(None) => break,
+                Err(err) => self.errors.push(err),
+            }
         }
 
         // Find pattern terminator (newline, EOF, or #)
@@ -239,7 +240,7 @@ impl<'a> Parser<'a> {
         Spanned::new(pattern, (start, self.pos))
     }
 
-    fn parse_owner(&mut self) -> Option<Spanned<Owner>> {
+    fn parse_owner(&mut self) -> Result<Option<Spanned<Owner>>, ParseError> {
         let start = self.pos;
         let mut owner_str = String::new();
         loop {
@@ -254,18 +255,15 @@ impl<'a> Parser<'a> {
         }
 
         if owner_str.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         match Owner::try_from(owner_str) {
-            Ok(owner) => Some(Spanned::new(owner, (start, self.pos))),
-            Err(err) => {
-                self.errors.push(ParseError {
-                    message: err.to_string(),
-                    span: (start, self.pos).into(),
-                });
-                None
-            }
+            Ok(owner) => Ok(Some(Spanned::new(owner, (start, self.pos)))),
+            Err(err) => Err(ParseError {
+                message: err.to_string(),
+                span: (start, self.pos).into(),
+            }),
         }
     }
 
@@ -327,8 +325,14 @@ mod tests {
                 )],
             ),
             (
-                "foo bar",
-                vec![Rule::new(Spanned::new("foo", (0, 3)), vec![])],
+                "foo bar @baz",
+                vec![Rule::new(
+                    Spanned::new("foo", (0, 3)),
+                    vec![Spanned::new(
+                        Owner::new("@baz".to_string(), OwnerKind::User),
+                        (8, 12),
+                    )],
+                )],
                 vec![ParseError::new("invalid owner: bar", (4, 7))],
             ),
             (
