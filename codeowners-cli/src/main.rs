@@ -18,24 +18,24 @@ struct Cli {
 
     /// Path to a CODEOWNERS file. If omitted, the following locations will be tried:
     /// ./CODEOWNERS, ./.github/CODEOWNERS
-    #[clap(short = 'f', long = "file")]
+    #[arg(short = 'f', long = "file")]
     codeowners_file: Option<PathBuf>,
 
     /// Match paths from this file rather than walking the directory tree
-    #[clap(short = 'p', long = "paths-from")]
+    #[arg(short = 'p', long = "paths-from")]
     paths_from_file: Option<PathBuf>,
 
     /// Filter results to files owned by this owner. May be used multiple times to
     /// match multiple owners
-    #[clap(short = 'o', long = "owners")]
+    #[arg(short = 'o', long = "owners")]
     owners: Vec<String>,
 
     /// Filter results to show unowned files. May be used with -o.
-    #[clap(short = 'u', long = "unowned")]
+    #[arg(short = 'u', long = "unowned")]
     unowned: bool,
 
     /// Concurrency. If set to 0, a sensible value based on CPU count will be used.
-    #[clap(short = 't', long = "threads", default_value_t = 0)]
+    #[arg(short = 't', long = "threads", default_value_t = 0)]
     threads: usize,
 
     #[cfg(debug_assertions)]
@@ -86,7 +86,7 @@ impl Cli {
 
     fn matches_owners_filters(&self, file_owners: Option<&[Owner]>) -> bool {
         if let Some(file_owners) = file_owners {
-            // Owned files. If Some, slice will be non-empty.
+            // Owned files. If Some, `file_owners` slice will be non-empty.
             if self.owners.is_empty() && !self.unowned {
                 // No filters applied
                 return true;
@@ -102,6 +102,8 @@ impl Cli {
             false
         } else {
             // Unowned files
+            // Show unowned files a) if explicitly requested, or b) if no filters were
+            // applied (i.e. self.owners is empty _and_ self.unowned is false).
             self.unowned || self.owners.is_empty()
         }
     }
