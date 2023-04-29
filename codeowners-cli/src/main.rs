@@ -156,13 +156,14 @@ fn main() -> Result<()> {
     // Spawn a thread to print output. Doing all stdout writes from a single thread
     // means less time spent locking and unlocking stdout.
     let (output_tx, output_rx) = std::sync::mpsc::sync_channel::<Option<String>>(10000);
-    std::thread::spawn(move || {
+    let join_handle = std::thread::spawn(move || {
         let mut lock = std::io::stdout().lock();
         for line in output_rx.iter().flatten() {
             lock.write_all(line.as_bytes()).unwrap();
         }
     });
 
+    // Match each of the paths. May happen in parallel if rayon is enabled.
     paths.for_each(|path| {
         let thread_local_ruleset = tl.get_or(|| ruleset.clone());
         let path = path.strip_prefix(".").unwrap_or(&path);
@@ -170,6 +171,10 @@ fn main() -> Result<()> {
             .send(output_for_path(&cli, path, thread_local_ruleset))
             .unwrap();
     });
+    drop(output_tx);
+
+    // Wait for stdout thread to finish
+    join_handle.join().unwrap();
 
     Ok(())
 }
