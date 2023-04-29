@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufRead, Read},
+    io::{BufRead, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -152,16 +152,29 @@ fn main() -> Result<()> {
     let paths = paths.par_bridge();
 
     let tl = thread_local::ThreadLocal::new();
+
+    // Spawn a thread to print output. Doing all stdout writes from a single thread
+    // means less time spent locking and unlocking stdout.
+    let (output_tx, output_rx) = std::sync::mpsc::sync_channel::<Option<String>>(10000);
+    std::thread::spawn(move || {
+        let mut lock = std::io::stdout().lock();
+        for line in output_rx.iter().flatten() {
+            lock.write_all(line.as_bytes()).unwrap();
+        }
+    });
+
     paths.for_each(|path| {
         let thread_local_ruleset = tl.get_or(|| ruleset.clone());
         let path = path.strip_prefix(".").unwrap_or(&path);
-        print_owners(&cli, path, thread_local_ruleset);
+        output_tx
+            .send(output_for_path(&cli, path, thread_local_ruleset))
+            .unwrap();
     });
 
     Ok(())
 }
 
-fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
+fn output_for_path(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) -> Option<String> {
     let path = path
         .as_ref()
         .strip_prefix(".")
@@ -186,24 +199,25 @@ fn print_owners(cli: &Cli, path: impl AsRef<Path>, ruleset: &RuleSet) {
     }
 
     let owners = ruleset.owners(path);
-    if cli.matches_owners_filters(owners) {
-        match owners {
-            Some(owners) => {
-                println!(
-                    "{:<70}  {}",
-                    path.display(),
-                    owners
-                        .iter()
-                        .map(|o| o.value.as_str())
-                        .collect::<Vec<&str>>()
-                        .join(" ")
-                )
-            }
-            None => {
-                println!("{:<70}  (unowned)", path.display())
-            }
-        }
+    if !cli.matches_owners_filters(owners) {
+        return None;
     }
+    Some(match owners {
+        Some(owners) => {
+            format!(
+                "{:<70}  {}\n",
+                path.display(),
+                owners
+                    .iter()
+                    .map(|o| o.value.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(" ")
+            )
+        }
+        None => {
+            format!("{:<70}  (unowned)\n", path.display())
+        }
+    })
 }
 
 fn walk_files(root: impl AsRef<Path>) -> impl Iterator<Item = PathBuf> {
