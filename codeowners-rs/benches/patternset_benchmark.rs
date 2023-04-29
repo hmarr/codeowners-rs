@@ -40,7 +40,7 @@ fn patternset_benchmark(c: &mut Criterion) {
     c.bench_function("matching", |b| {
         b.iter(|| {
             for p in TEST_PATHS {
-                patternset.all_matching_rules(p);
+                patternset.matching_rule(p);
             }
         })
     });
