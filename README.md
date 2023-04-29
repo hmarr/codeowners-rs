@@ -6,9 +6,10 @@ A fast Rust library and CLI for GitHub's [CODEOWNERS file](https://docs.github.c
 [![docs.rs](https://img.shields.io/badge/docs.rs-codeowners--rs-blue?logo=docs.rs)](https://docs.rs/codeowners-rs)
 [![CI](https://github.com/hmarr/codeowners-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/hmarr/codeowners-rs/actions/workflows/ci.yml)
 
-Includes a fast, hand-written parser for CODEOWNERS files. The resulting parse tree includes comments and byte offsets for all syntax components, making it suitable for writing syntax highlighters or providing syntax-aware diagnostic information.
+## Highlights
 
-The matcher works by building an NFA from the rules, which makes this library highly performant for large rulesets and matching large numbers of paths.
+- Processes large, complex CODEOWNERS files quickly by constructing an NFA from the set of rules. Rather than matching each rule against each path, the NFA is traversed once for each path. The CLI tool also parallelizes path matching.
+- Includes a fast, hand-written parser for CODEOWNERS files. The resulting parse tree includes comments and byte offsets for all syntax components, making it suitable for writing syntax highlighters or providing syntax-aware diagnostic information.
 
 ## Example usage
 
