@@ -159,17 +159,19 @@ fn main() -> Result<()> {
     let join_handle = std::thread::spawn(move || {
         let mut lock = std::io::stdout().lock();
         for line in output_rx.iter().flatten() {
-            lock.write_all(line.as_bytes()).unwrap();
+            if let Err(err) = lock.write_all(line.as_bytes()) {
+                if err.kind() == std::io::ErrorKind::BrokenPipe {
+                    break;
+                }
+            }
         }
     });
 
     // Match each of the paths. May happen in parallel if rayon is enabled.
-    paths.for_each(|path| {
+    let _ = paths.try_for_each(|path| {
         let thread_local_ruleset = tl.get_or(|| ruleset.clone());
         let path = path.strip_prefix(".").unwrap_or(&path);
-        output_tx
-            .send(output_for_path(&cli, path, thread_local_ruleset))
-            .unwrap();
+        output_tx.send(output_for_path(&cli, path, thread_local_ruleset))
     });
     drop(output_tx);
 
