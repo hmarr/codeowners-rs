@@ -67,6 +67,10 @@ impl RuleSet {
             .map(|&idx| (idx, &self.rules[idx]))
             .collect()
     }
+
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
+    }
 }
 
 // `Rule` is an individual CODEOWNERS rule. It contains a pattern and a list of
@@ -129,4 +133,15 @@ pub enum OwnerKind {
     User,
     Team,
     Email,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rules_getter() {
+        let ruleset = RuleSet::new(vec![]);
+        assert_eq!(ruleset.rules(), &[]);
+    }
 }
