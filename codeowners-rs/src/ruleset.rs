@@ -48,13 +48,13 @@ impl RuleSet {
     /// Returns the owners for the given path, or `None` if no rules match the
     /// path or the matching rule has no owners.
     pub fn owners(&self, path: impl AsRef<Path>) -> Option<&[Owner]> {
-        return self.matching_rule(path).and_then(|rule| {
+        self.matching_rule(path).and_then(|rule| {
             if rule.owners.is_empty() {
                 None
             } else {
                 Some(rule.owners.as_ref())
             }
-        });
+        })
     }
 
     /// Returns the all rules that match the given path along with their indices.

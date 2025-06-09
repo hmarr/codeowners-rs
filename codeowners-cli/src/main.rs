@@ -74,7 +74,7 @@ impl Cli {
                 .map_err(|e| anyhow!("reading {:?}: {}", paths_from_file, e))?;
             let reader = std::io::BufReader::new(file);
             Ok(Box::new(
-                reader.lines().filter_map(|l| l.ok()).map(PathBuf::from),
+                reader.lines().map_while(Result::ok).map(PathBuf::from),
             ))
         } else {
             Ok(self.root_paths().into_iter().map(walk_files).fold(
